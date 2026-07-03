@@ -1312,8 +1312,141 @@ init();
 </html>"""
 
 
+# ── First-run setup (the friendly path: no terminal, no jargon) ───────────────
+
+SETUP_HTML = r"""<!DOCTYPE html>
+<html lang="en"><head><meta charset="UTF-8">
+<title>Forget-me-not · welcome</title>
+<style>
+  :root { --bg:#12131a; --card:#1b1d27; --ink:#e8e6f0; --muted:#8a8798;
+          --accent:#7f9cf5; --soft:#2a2d3d; }
+  * { box-sizing:border-box; margin:0; }
+  body { background:var(--bg); color:var(--ink); font:15px/1.6 system-ui,
+         -apple-system,'Segoe UI',sans-serif; display:flex; min-height:100vh;
+         align-items:center; justify-content:center; padding:24px; }
+  .card { background:var(--card); border-radius:16px; padding:36px 40px;
+          max-width:560px; width:100%; box-shadow:0 8px 40px #0008; }
+  h1 { font-size:22px; font-weight:600; margin-bottom:6px; }
+  .sub { color:var(--muted); margin-bottom:26px; }
+  label { display:block; font-size:13px; color:var(--muted); margin:16px 0 5px; }
+  input { width:100%; background:var(--soft); border:1px solid #3a3d4f;
+          color:var(--ink); border-radius:8px; padding:10px 12px; font-size:15px; }
+  input:focus { outline:none; border-color:var(--accent); }
+  .hint { font-size:12px; color:var(--muted); margin-top:4px; }
+  .hint a { color:var(--accent); }
+  details { margin-top:18px; }
+  summary { color:var(--muted); font-size:13px; cursor:pointer; }
+  button { margin-top:26px; width:100%; background:var(--accent); color:#101018;
+           border:0; border-radius:10px; padding:13px; font-size:16px;
+           font-weight:600; cursor:pointer; }
+  button:hover { filter:brightness(1.1); }
+  .quiet { font-size:12px; color:var(--muted); margin-top:16px; text-align:center; }
+  .done { text-align:center; padding:30px 0; }
+  .done h2 { font-size:20px; margin-bottom:10px; }
+</style></head><body>
+<div class="card" id="card">
+  <h1>Forget-me-not 🌸</h1>
+  <div class="sub">A memory for your companion, living entirely on your own
+  computer. Two minutes of setup, no technical knowledge needed.</div>
+
+  <label>Your name — the way your companion says it</label>
+  <input id="h" placeholder="e.g. Sam">
+  <label>Your pronouns</label>
+  <input id="hp" placeholder="e.g. she/her, he/him, they/them">
+  <label>Your companion's name</label>
+  <input id="c" placeholder="e.g. Nova">
+
+  <details><summary>Where should the memories live? (a folder is chosen
+  for you — change it only if you care)</summary>
+    <label>Memory folder</label>
+    <input id="v" placeholder="">
+    <div class="hint">Just a folder of ordinary text files. Back it up and
+    you've backed up everything.</div>
+  </details>
+
+  <details><summary>Connect the summarizer (optional now, needed before
+  memories can be written)</summary>
+    <label>OpenRouter key</label>
+    <input id="k" placeholder="sk-or-...">
+    <div class="hint">Forget-me-not uses a small AI service to turn
+    conversations into memory cards — it costs a few cents per day of chatting.
+    Create a free account at <a href="https://openrouter.ai/keys"
+    target="_blank">openrouter.ai/keys</a>, click "Create Key", and paste the
+    long password here. It's stored on your computer only. You can also do
+    this later.</div>
+  </details>
+
+  <button onclick="go()">Begin remembering</button>
+  <div class="quiet">Everything stays on this machine. Nothing is ever
+  deleted. Memories are sealed so they can't be secretly changed — not even
+  by the app itself.</div>
+</div>
+<script>
+async function go() {
+  const h = document.getElementById('h').value.trim();
+  const c = document.getElementById('c').value.trim();
+  if (!h || !c) { alert('The two names are the only required part 🌸'); return; }
+  const body = { h, c,
+    hp: document.getElementById('hp').value.trim() || 'they/them',
+    vault: document.getElementById('v').value.trim(),
+    key: document.getElementById('k').value.trim() };
+  const r = await fetch('/api/setup', {method:'POST',
+    headers:{'Content-Type':'application/json'}, body: JSON.stringify(body)});
+  const d = await r.json();
+  if (!d.ok) { alert('Something went wrong: ' + (d.error||'')); return; }
+  document.getElementById('card').innerHTML = `<div class="done">
+    <h2>${c} can start remembering 🌸</h2>
+    <p style="color:var(--muted)">Memory home: <code>${d.vault}</code></p>
+    <p style="margin-top:14px">Close this tab and open Forget-me-not again —
+    it will wake up as the memory panel.</p></div>`;
+}
+</script></body></html>"""
+
+
+def _fresh_install() -> bool:
+    """First run = no vault.toml AND no existing graph. An installed vault
+    (like the original) never sees the setup page."""
+    try:
+        import fmn_config
+        if fmn_config.TOML_FILE.exists():
+            return False
+    except Exception:
+        return False
+    return not GRAPH_FILE_EXISTS()
+
+
+def GRAPH_FILE_EXISTS() -> bool:
+    from memory_graph import GRAPH_FILE
+    return GRAPH_FILE.exists()
+
+
+@app.route("/setup")
+def setup_page():
+    return render_template_string(SETUP_HTML)
+
+
+@app.route("/api/setup", methods=["POST"])
+def api_setup():
+    data = request.json or {}
+    h, c = data.get("h", "").strip(), data.get("c", "").strip()
+    if not h or not c:
+        return jsonify({"ok": False, "error": "both names are required"}), 400
+    hp = data.get("hp", "they/them").strip()
+    vault = data.get("vault", "").strip() \
+        or str(Path.home() / "Documents" / f"{c} Vault")
+    try:
+        import fmn_config
+        fmn_config.write_config(h, hp, c, vault,
+                                api_key=data.get("key", "").strip())
+        return jsonify({"ok": True, "vault": vault})
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)}), 500
+
+
 @app.route("/")
 def index():
+    if _fresh_install():
+        return render_template_string(SETUP_HTML)
     return render_template_string(HTML)
 
 

@@ -174,6 +174,60 @@ def _ask(prompt: str, default: str) -> str:
     return v or default
 
 
+def write_config(h: str, hp: str, c: str, vault: str,
+                 system_prompt: str = "", api_key: str = "") -> Path:
+    """Write vault.toml + create the vault skeleton. Shared by the CLI
+    wizard and the panel's first-run setup page. If api_key looks like a
+    raw key (not a path), it is stored in a key file INSIDE the vault
+    (never in vault.toml, never in the repo dir)."""
+    key_file = ""
+    if api_key:
+        p = Path(api_key)
+        if p.exists():                      # user gave a .env-style file
+            key_file = str(p)
+        else:                               # raw key -> file inside the vault
+            kf = Path(vault) / "00_KEYS" / "api.env"
+            kf.parent.mkdir(parents=True, exist_ok=True)
+            kf.write_text(f"OPENROUTER_API_KEY={api_key.strip()}\n",
+                          encoding="utf-8")
+            key_file = str(kf)
+
+    lines = [
+        "# Forget-me-not configuration (written by setup)",
+        "", "[identity]",
+        f'human = "{h}"', f'human_pronouns = "{hp}"', f'companion = "{c}"',
+        "# entities never used as graph edges (your names are automatic):",
+        "generic_entities = []",
+        "", "[paths]",
+        f'vault_root = "{vault.replace(chr(92), "/")}"',
+    ]
+    if system_prompt:
+        lines.append(f'system_prompt = "{system_prompt.replace(chr(92), "/")}"')
+    if key_file:
+        lines.append(f'openrouter_key_file = "{key_file.replace(chr(92), "/")}"')
+    lines += [
+        "", "[models]",
+        '# Any OpenAI-compatible model ids (via OpenRouter by default).',
+        'chunker   = "meta-llama/llama-3.3-70b-instruct"',
+        'summarizer = "google/gemini-2.5-flash"',
+        'ruminator = "google/gemini-2.5-flash"',
+        "", "[recall]", "max_cells = 15",
+        "", "[cadence]", "reflect_min_worthy = 3", "reflect_min_hours = 36",
+    ]
+    TOML_FILE.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+    root = Path(vault)
+    for d in ("00_KEYS", "30_EPISODES/nodes", "30_EPISODES/quarantine",
+              "40_REFLECTIONS", "50_RUMINATION", "60_CONSTELLATIONS",
+              "60_PROFILE/proposed", "70_TIMELINE",
+              "90_ARCHIVE/session_cells_quarantine"):
+        (root / d).mkdir(parents=True, exist_ok=True)
+
+    global _cfg
+    _cfg = None                             # reload on next access
+    return TOML_FILE
+
+
 def init_wizard() -> int:
     print("Forget-me-not · setup\n"
           "A memory for an AI companion. Everything stays on this machine.\n")
@@ -189,41 +243,12 @@ def init_wizard() -> int:
     v = _ask("Vault folder (the memory lives here — back it up!)", default_vault)
     sp = _ask("Companion's system-prompt file (boot notes are injected here;"
               " blank to skip)", "")
-    key = _ask("OpenRouter API key file (.env style; blank = use env var)", "")
+    key = _ask("OpenRouter API key, or a .env-style file holding one "
+               "(blank = use env var)", "")
 
-    lines = [
-        "# Forget-me-not configuration (written by fmn.py init)",
-        "", "[identity]",
-        f'human = "{h}"', f'human_pronouns = "{hp}"', f'companion = "{c}"',
-        "# entities never used as graph edges (your names are automatic):",
-        "generic_entities = []",
-        "", "[paths]",
-        f'vault_root = "{v.replace(chr(92), "/")}"',
-    ]
-    if sp:
-        lines.append(f'system_prompt = "{sp.replace(chr(92), "/")}"')
-    if key:
-        lines.append(f'openrouter_key_file = "{key.replace(chr(92), "/")}"')
-    lines += [
-        "", "[models]",
-        '# Any OpenAI-compatible model ids (via OpenRouter by default).',
-        'chunker   = "meta-llama/llama-3.3-70b-instruct"',
-        'summarizer = "google/gemini-2.5-flash"',
-        'ruminator = "google/gemini-2.5-flash"',
-        "", "[recall]", "max_cells = 15",
-        "", "[cadence]", "reflect_min_worthy = 3", "reflect_min_hours = 36",
-    ]
-    TOML_FILE.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    write_config(h, hp, c, v, system_prompt=sp, api_key=key)
     print(f"\nOK wrote {TOML_FILE}")
-
-    # Vault skeleton
-    root = Path(v)
-    for d in ("00_KEYS", "30_EPISODES/nodes", "30_EPISODES/quarantine",
-              "40_REFLECTIONS", "50_RUMINATION", "60_CONSTELLATIONS",
-              "60_PROFILE/proposed", "70_TIMELINE",
-              "90_ARCHIVE/session_cells_quarantine"):
-        (root / d).mkdir(parents=True, exist_ok=True)
-    print(f"OK vault skeleton at {root}")
+    print(f"OK vault skeleton at {v}")
     print("\nNext: python fmn.py doctor   (health check)\n"
           "Then feed it a conversation: python fmn.py analyze --file "
           "<session.jsonl>  (JSONL of {role, content} lines)\n"

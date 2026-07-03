@@ -53,6 +53,7 @@ ROUTES = {
     "embed":         ("memory_embed.py", ["build"]),
     "audit":         ("memory_audit.py", []),
     "eval":          ("memory_eval.py", ["run"]),
+    "sign":          ("memory_sign.py", []),
     "panel":         ("vault_viz.py", []),
     "timeline":      ("memory_timeline.py", []),
 }

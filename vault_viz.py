@@ -210,11 +210,15 @@ def api_cell_update(cell_id: str):
             new_episode = data.get("episode", cell_data["episode"])
             write_cell_file(Path(file_path), fm,
                             new_brief, new_episode, cell_data["chunk"])
-            # Re-stamp the tamper-evidence seal (sanctioned edit path).
+            # Re-stamp the tamper-evidence seal (sanctioned edit path) AND
+            # sign the reseal — this is exactly the operation the signature
+            # layer exists to distinguish from an unsanctioned re-stamp.
             try:
                 from memory_trust import content_hash
                 node["content_hash"] = content_hash(new_brief, new_episode,
                                                     cell_data["chunk"])
+                import memory_sign
+                memory_sign.sign_event(cell_id, node["content_hash"], "reseal")
             except Exception:
                 pass
             # A human edit through the panel IS human verification.

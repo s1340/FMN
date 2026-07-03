@@ -223,6 +223,12 @@ def form(graph: dict, member_ids: list[str], gist_brief: str,
         graph["edges"].append({"a": cid, "b": m, "type": "constellation",
                                "weight": 1.5, "note": "member",
                                "created": now.isoformat()})
+    try:
+        import memory_sign
+        memory_sign.sign_event(cid, graph["nodes"][cid]["content_hash"],
+                               "admit")
+    except Exception:
+        pass
     return cid
 
 

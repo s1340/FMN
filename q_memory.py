@@ -113,6 +113,12 @@ def remember(brief: str, chunk: str, topics: list[str], significance: str,
         memory_embed.embed_cells(mg.load_graph())
     except Exception:
         pass
+    try:
+        import memory_sign
+        memory_sign.sign_event(cid, content_hash(brief, episode, chunk),
+                               "admit")
+    except Exception:
+        pass
 
     return cid
 
@@ -142,6 +148,12 @@ def annotate(cell_id: str, note: str) -> str | None:
         node["content_hash"] = content_hash(cell["brief"], cell["episode"], cell["chunk"])
         node["reflection_candidate"] = True
         node["q_notes"] = node.get("q_notes", 0) + 1
+        new_hash = node["content_hash"]
+    try:
+        import memory_sign
+        memory_sign.sign_event(cell_id, new_hash, "annotate")
+    except Exception:
+        pass
     return None
 
 

@@ -223,12 +223,22 @@ def admit(dry: bool) -> int:
     # Phase 2 (UNDER lock): brief critical section — re-load fresh (a concurrent
     # remember may have landed), merge, save. Never clobbers another writer.
     if not dry and to_add:
+        merged = []
         with mg.locked_graph() as graph:
             for node in to_add:
                 if node["cell_id"] in graph["nodes"]:
                     continue
                 graph["nodes"][node["cell_id"]] = node
                 graph["metadata"]["total_approvals"] += 1
+                merged.append(node)
+        # Ed25519 seal-event log (memory_sign): each admission's seal is
+        # signed and chained, so a later re-stamp can't masquerade as history
+        try:
+            import memory_sign
+            memory_sign.sign_events(
+                [(n["cell_id"], n["content_hash"], "admit") for n in merged])
+        except Exception:
+            pass
 
     # Embed newly admitted cells (FMN semantic layer; no-op if unavailable)
     if not dry:
@@ -283,7 +293,15 @@ def verify() -> int:
             print(f"  {cid}")
     if missing_hash:
         print(f"\nNote: {missing_hash} legacy nodes predate hashing — run `backfill` to hash them.")
-    return 1 if (drift or missing_file) else 0
+    # Signature layer: catches the attack this hash check can't — content
+    # edited AND hash re-stamped. Quiet unless it finds something.
+    sig_bad = 0
+    try:
+        import memory_sign
+        sig_bad = memory_sign.verify(graph, quiet=True)
+    except Exception:
+        pass
+    return 1 if (drift or missing_file or sig_bad) else 0
 
 
 def backfill() -> int:
@@ -302,6 +320,12 @@ def backfill() -> int:
                 n_hash += 1
     mg.save_graph(graph)
     print(f"Backfilled: {n_trust} trust tiers, {n_hash} content hashes")
+    try:
+        import memory_sign
+        if memory_sign.available():
+            memory_sign.baseline()
+    except Exception:
+        pass
     return 0
 
 

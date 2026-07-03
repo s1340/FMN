@@ -5,6 +5,7 @@ fmn.py — Forget-me-not: one entry point for the whole memory system.
 A thin dispatcher over the subsystem scripts so users (and cron) run one
 command instead of remembering eight filenames.
 
+    python fmn.py init                         # first-time setup wizard
     python fmn.py analyze --session-id <id>   # session -> cells (quarantine)
     python fmn.py admit                        # auto-admit + QC + embed
     python fmn.py recall                        # write boot note into .hermes.md
@@ -31,6 +32,16 @@ import sys
 from pathlib import Path
 
 HERE = Path(__file__).parent
+
+# vault.toml -> env (never clobbers explicit env). Subprocesses inherit,
+# so one config file steers every module. See fmn_config.py.
+sys.path.insert(0, str(HERE))
+try:
+    import fmn_config
+    fmn_config.inject_env()
+except Exception as _e:
+    print(f"[fmn] config layer unavailable ({_e}) — built-in defaults",
+          file=sys.stderr)
 
 # command -> (script, prepend-args)
 ROUTES = {
@@ -109,6 +120,8 @@ def main():
         print(__doc__)
         return
     cmd = sys.argv[1]
+    if cmd == "init":
+        sys.exit(fmn_config.init_wizard())
     if cmd == "doctor":
         doctor()
         return

@@ -56,6 +56,15 @@ SUMMARY_MODEL  = os.environ.get("MEMORY_SUMMARY_MODEL",
 MAX_TRANSCRIPT_CHARS = 400_000  # ~100k tokens; covers most sessions on 128k-ctx models
 MAX_CHUNK_CHARS      = 8_000    # per-cell summary input ceiling
 
+# Identity templating: prompts below are written in the original voice
+# (Mal & Q); fmn_config.personalize renders them for the configured pair.
+sys.path.insert(0, str(Path(__file__).parent))
+try:
+    from fmn_config import personalize as _pers
+except Exception:
+    def _pers(t):
+        return t
+
 # ── Phase 1 prompt: boundary identification only ───────────────────────────────
 
 BOUNDARY_SYSTEM = """\
@@ -300,7 +309,7 @@ def _llm_call_with_retry(system: str, user: str, label: str,
 def identify_boundaries(transcript: str) -> list[dict]:
     """Phase 1: ask LLM for cell boundaries (indices + topics + entities only)."""
     parsed = _llm_call_with_retry(
-        BOUNDARY_SYSTEM, f"Transcript:\n\n{transcript}", label="boundary")
+        _pers(BOUNDARY_SYSTEM), f"Transcript:\n\n{transcript}", label="boundary")
     return parsed.get("boundaries", [])
 
 
@@ -312,7 +321,7 @@ def summarize_cell(chunk_text: str, topics: list[str], entities: list[str]) -> d
         f"Transcript excerpt:\n\n{chunk_text}"
     )
     try:
-        return _llm_call_with_retry(SUMMARY_SYSTEM, context, label="summary",
+        return _llm_call_with_retry(_pers(SUMMARY_SYSTEM), context, label="summary",
                                     model=SUMMARY_MODEL)
     except json.JSONDecodeError:
         return {

@@ -68,12 +68,17 @@ SUMMARY_MODEL = os.environ.get("REFLECTION_SUMMARY_MODEL", "google/gemini-2.5-fl
 MAX_CELLS       = 5          # fewer, richer — reflection is not a digest
 MAX_CHUNK_CHARS = 24_000     # ~6k tokens of verbatim text across the bundle
 
-# Cadence: reflection is consolidation, not a chore.
-MIN_WORTHY_CELLS   = 3       # normal trigger threshold
-MIN_HOURS_BETWEEN  = 36      # anti-thrash
+# Cadence: reflection is consolidation, not a chore. (vault.toml [cadence])
+MIN_WORTHY_CELLS   = int(os.environ.get("FMN_REFLECT_MIN_WORTHY", "3"))
+MIN_HOURS_BETWEEN  = int(os.environ.get("FMN_REFLECT_MIN_HOURS", "36"))
 WEEKLY_FLOOR_DAYS  = 7       # if ANY worthy cell waits this long, trigger anyway
 
-REFLECTIVE_TYPES = {"relationship", "personal_q", "personal_mal", "reflection"}
+try:
+    from fmn_config import personal_types as _pt
+    _PM, _PC = _pt()
+except Exception:
+    _PM, _PC = "personal_mal", "personal_q"
+REFLECTIVE_TYPES = {"relationship", _PC, _PM, "reflection"}
 EXCLUDED_TYPES   = {"work_research", "environment_tools", "correction"}
 
 
@@ -227,7 +232,12 @@ def cmd_curate(dry: bool) -> int:
         return 1
 
     ids = ",".join(n["cell_id"] for n, _ in bundle)
-    lines = [CURATION_HEADER.format(
+    try:
+        from fmn_config import personalize as _pers
+    except Exception:
+        def _pers(t):
+            return t
+    lines = [_pers(CURATION_HEADER).format(
         date=datetime.now(timezone.utc).strftime("%Y-%m-%d"), cell_ids=ids)]
 
     # Continuity window (TiMem w=3): your last reflections, so this one can
@@ -361,7 +371,12 @@ def cmd_ingest(reflection_path: str, cell_ids: list[str]) -> int:
     reflection_text = path.read_text(encoding="utf-8")
 
     print(f"Summarizing reflection ({SUMMARY_MODEL}) ...")
-    summary = _llm(REFLECTION_CELL_SYSTEM, reflection_text)
+    try:
+        from fmn_config import personalize as _pers
+    except Exception:
+        def _pers(t):
+            return t
+    summary = _llm(_pers(REFLECTION_CELL_SYSTEM), reflection_text)
 
     cell_id = os.urandom(4).hex()
     now = datetime.now(timezone.utc)

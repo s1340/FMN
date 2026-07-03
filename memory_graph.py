@@ -328,8 +328,12 @@ def build_auto_edges(graph: dict) -> None:
     ubiquitous = {e for e, count in entity_freq.items()
                   if count > max(5, n_nodes * 0.08)}
 
-    # Generic entities always excluded
-    generic = {"mal", "q", "hermes", "sonnet", "sage", "telegram"}
+    # Generic entities always excluded (the two of you + configured extras)
+    try:
+        from fmn_config import generic_entities
+        generic = generic_entities()
+    except Exception:
+        generic = {"mal", "q", "hermes", "sonnet", "sage", "telegram"}
 
     def meaningful_entities(node):
         return {e.lower() for e in node.get("entities", [])
@@ -478,6 +482,12 @@ def query_graph(text: str, graph: dict, limit: int = 10, touch: bool = False,
             bm25 = {}
     bm25_max = max(bm25.values()) if bm25 else 0.0
 
+    try:
+        from fmn_config import generic_entities
+        _generic = generic_entities()
+    except Exception:
+        _generic = {"mal", "q", "hermes"}
+
     # Score each node by keyword overlap
     scored = []
     for node in graph["nodes"].values():
@@ -501,7 +511,7 @@ def query_graph(text: str, graph: dict, limit: int = 10, touch: bool = False,
 
         # Entity matches
         for entity in node.get("entities", []):
-            if entity.lower() in text_lower and entity.lower() not in {"mal", "q", "hermes"}:
+            if entity.lower() in text_lower and entity.lower() not in _generic:
                 score += 3.0
                 matched.append(f"entity:{entity}")
 

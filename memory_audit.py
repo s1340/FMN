@@ -45,6 +45,12 @@ MODEL = os.environ.get("MEMORY_AUDIT_MODEL", "google/gemini-2.5-flash")
 MAX_CHUNK = 6000
 AUDIT_VOTES = int(os.environ.get("MEMORY_AUDIT_VOTES", "3"))  # ensemble the noisy judge
 
+try:
+    from fmn_config import personalize as _pers
+except Exception:
+    def _pers(t):
+        return t
+
 AUDIT_SYSTEM = """\
 You verify that a memory SUMMARY faithfully represents its source TRANSCRIPT.
 You are hunting one failure above all: ROLE INVERSION — the summary getting

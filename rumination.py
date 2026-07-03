@@ -66,7 +66,11 @@ REPORT_DIR = VAULT_ROOT / "50_RUMINATION"
 
 MODEL = os.environ.get("RUMINATION_MODEL", "google/gemini-2.5-flash")
 
-GENERIC_ENTITIES = {"mal", "q", "hermes", "sonnet", "sage", "telegram"}
+try:
+    from fmn_config import generic_entities as _ge
+    GENERIC_ENTITIES = _ge()
+except Exception:
+    GENERIC_ENTITIES = {"mal", "q", "hermes", "sonnet", "sage", "telegram"}
 MAX_EPISODE_CHARS = 2_000   # per cell, judge input
 MAX_CHUNK_CHARS   = 6_000   # per cell, confirm input
 

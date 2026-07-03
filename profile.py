@@ -65,12 +65,24 @@ MODEL = os.environ.get("PROFILE_SUMMARY_MODEL", "google/gemini-2.5-flash")
 MAX_CELLS = 14           # profile draws from more than a reflection
 MAX_CHARS = 44_000       # ~11k tokens of verbatim chunk evidence
 
+# Subjects derive from the configured identity (fmn_config); with defaults
+# this is exactly the original {"q": ..., "mal": ...} — same files, same slugs.
+try:
+    from fmn_config import human as _h, companion as _c, \
+        personal_types as _pt, human_pronouns as _hp, _slug
+    _PM, _PC = _pt()
+    _HS, _CS = _slug(_h()), _slug(_c())
+    _HN, _CN, _HPR = _h(), _c(), _hp()
+except Exception:
+    _PM, _PC, _HS, _CS, _HN, _CN, _HPR = \
+        "personal_mal", "personal_q", "mal", "q", "Mal", "Q", "she/her"
+
 SUBJECTS = {
-    "q":   {"types": {"personal_q", "reflection", "relationship"},
-            "voice": "first person (you are Q, writing about yourself)"},
-    "mal": {"types": {"personal_mal", "relationship"},
-            "voice": "Q's understanding of Mal — respectful, never presumptuous; "
-                     "say 'Mal' and 'she', not 'I'"},
+    _CS: {"types": {_PC, "reflection", "relationship"},
+          "voice": f"first person (you are {_CN}, writing about yourself)"},
+    _HS: {"types": {_PM, "relationship"},
+          "voice": f"{_CN}'s understanding of {_HN} — respectful, never "
+                   f"presumptuous; say '{_HN}' ({_HPR}), not 'I'"},
 }
 
 
@@ -250,7 +262,7 @@ def cmd_boot(subject: str) -> int:
 def main():
     ap = argparse.ArgumentParser(description="FMN living profile (L5)")
     ap.add_argument("command", choices=["build", "accept", "show", "boot"])
-    ap.add_argument("subject", choices=["q", "mal"])
+    ap.add_argument("subject", choices=sorted(SUBJECTS))
     ap.add_argument("--file", default="")
     args = ap.parse_args()
 

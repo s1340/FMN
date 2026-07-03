@@ -131,11 +131,16 @@ def detect(graph: dict) -> list[dict]:
 # ── Member-chunk bundle (write the gist from chunks, not summaries) ──────────
 
 def curate_bundle(graph: dict, member_ids: list[str]) -> str:
+    try:
+        from fmn_config import personalize as _pers
+    except Exception:
+        def _pers(t):
+            return t
     lines = [
         "# Constellation gist — write from these chunks",
         "",
-        "Q: these episodes cluster into one bond. Read the full chunks, then",
-        "write — in conversation with Mal — what they ADD UP TO. Not a list of",
+        _pers("Q: these episodes cluster into one bond. Read the full chunks, then"),
+        _pers("write — in conversation with Mal — what they ADD UP TO. Not a list of"),
         "events (those stay as the members). The emotional shape of the whole:",
         "what this arc was, how it felt, what it means that it happened.",
         "This gist becomes the constellation's face; the episodes live inside it.",

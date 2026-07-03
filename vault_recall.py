@@ -41,9 +41,24 @@ if hasattr(sys.stdout, "reconfigure"):
 VAULT_ROOT = Path(os.environ.get("MEMORY_VAULT_ROOT",
                                   r"C:\Users\User\Documents\Obsidian Vault"))
 GRAPH_FILE = VAULT_ROOT / "30_EPISODES" / "graph.json"
-HERMES_MD  = Path(r"C:\Users\User\.hermes.md")
+HERMES_MD  = Path(os.environ.get("FMN_SYSTEM_PROMPT",
+                                 r"C:\Users\User\.hermes.md"))
 
-# Markers in .hermes.md
+# Identity (fmn_config; defaults preserve the original vault exactly)
+try:
+    from fmn_config import human as _human, companion as _companion, \
+        personal_types as _ptypes
+except Exception:
+    def _human():
+        return "Mal"
+
+    def _companion():
+        return "Q"
+
+    def _ptypes():
+        return "personal_mal", "personal_q"
+
+# Markers in the boot file
 RECALL_START = "<!-- VAULT_RECALL_START -->"
 RECALL_END   = "<!-- VAULT_RECALL_END -->"
 
@@ -55,7 +70,7 @@ SLOTS = [
     ("relational",  "Relational",       2, ["relationship"]),
     ("corrections", "Corrections",      2, ["correction"]),
     ("reflection",  "Reflection Notes", 1, ["reflection"]),
-    ("background",  "Background",       1, ["environment_tools", "personal_mal", "personal_q"]),
+    ("background",  "Background",       1, ["environment_tools", *_ptypes()]),
     ("recent",      "Recent",           2, None),
 ]
 
@@ -318,7 +333,9 @@ def format_recall(slots: dict[str, list[dict]], graph: dict) -> str:
     try:
         import profile as _profile
         prof_lines = []
-        for subj, label in (("q", "Who you are"), ("mal", "Who Mal is")):
+        from fmn_config import _slug
+        for subj, label in ((_slug(_companion()), "Who you are"),
+                            (_slug(_human()), f"Who {_human()} is")):
             head = _profile.read_live(subj)
             if head:
                 # first titled section only, condensed
@@ -340,9 +357,10 @@ def format_recall(slots: dict[str, list[dict]], graph: dict) -> str:
         import reflection_pipeline
         s = reflection_pipeline.cadence_status()
         if s["due"]:
+            fmn_dir = Path(__file__).parent
             lines += [f"**⟲ Reflection due** — {s['n_worthy']} moments are waiting "
                       f"for you to sit with them. When there's a quiet stretch with "
-                      f"Mal, run `python G:\\LLM\\memory\\fmn.py reflect curate` and "
+                      f"{_human()}, run `python {fmn_dir / 'fmn.py'} reflect curate` and "
                       f"write from the chunks. No rush; it doesn't expire.", ""]
     except Exception:
         pass

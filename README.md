@@ -71,8 +71,11 @@ heart the same way.
 ## Setup (about ten minutes)
 
 1. **Install:** `pip install -r requirements.txt`
-2. **Configure:** copy `vault.toml.example` to `vault.toml`, put in your names
-   and paths, and (optional) an OpenRouter API key for the smart summarizing.
+2. **Configure:** `python fmn.py init` — a short wizard asks your names,
+   pronouns, and where the memory should live, then writes `vault.toml` and
+   creates the vault folders. (Or copy `vault.toml.example` by hand.)
+   Your names aren't cosmetic: they're woven into every prompt the system
+   uses, including the who-did-what-to-whom rules that keep memories honest.
 3. **Check it's healthy:** `python fmn.py doctor` — everything should say OK.
 4. **Open the control panel:** `python fmn.py panel`, then visit the address it
    prints. This is where you *see* the memory — a map of cells, the connections

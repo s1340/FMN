@@ -1,16 +1,26 @@
-# Forget-me-not configuration. Copy to vault.toml and edit.
+# Forget-me-not configuration. Copy to vault.toml and edit — or better,
+# run `python fmn.py init` and let the wizard write it for you.
 # Anything omitted falls back to the built-in defaults.
+# Explicit environment variables always override this file.
 
 [identity]
-# Who is in this relationship. Used in analyzer prompts and edge filtering.
+# Who is in this relationship. Templated into every prompt (the analyzer's
+# agent-preservation rule, the audit role mapping, profile voices) and used
+# for graph edge filtering. The defaults preserve the original vault exactly.
 human = "Mal"
+human_pronouns = "she/her"
 companion = "Q"
+# Extra entities never used as association edges (your names are automatic):
+generic_entities = []
 
 [paths]
-# The vault (a folder of markdown files — this IS your memory, own it, back it up).
+# The vault (a folder of markdown files — this IS your memory, own it, back it
+# up; the 00_KEYS folder inside it is the signing key, part of the backup).
 vault_root = "C:/Users/User/Documents/Obsidian Vault"
 # The companion's system-prompt file that boot recall injects into.
 system_prompt = "C:/Users/User/.hermes.md"
+# Optional: a KEY=VALUE file to read OPENROUTER_API_KEY from (else use env).
+# openrouter_key_file = "C:/Users/You/secrets/.env"
 
 [models]
 # Any OpenAI-compatible endpoint (default: OpenRouter). Set OPENROUTER_API_KEY.
@@ -21,10 +31,10 @@ ruminator = "google/gemini-2.5-flash"             # contradiction judge (conserv
 # if it over-connects — pick a disciplined summarizer instead.
 
 [recall]
-# Boot note budget. Small and warm: most memory stays gray, reachable on demand.
+# Boot note budget (reserved — slot layout is currently fixed in vault_recall).
 max_cells = 15
 
 [cadence]
-# Reflection consolidation triggers (hours / count).
+# Reflection consolidation triggers (count / hours).
 reflect_min_worthy = 3
 reflect_min_hours  = 36

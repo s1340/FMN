@@ -453,13 +453,35 @@ def api_trigger_recall():
     })
 
 
+@app.route("/favicon.svg")
+def favicon():
+    """The forget-me-not mark (assets/fmn-mark.svg), embedded so the panel is
+    self-contained even if the assets folder moves."""
+    p = Path(__file__).parent / "assets" / "fmn-mark.svg"
+    if p.exists():
+        return app.response_class(p.read_text(encoding="utf-8"),
+                                  mimetype="image/svg+xml")
+    return ("", 404)
+
+
+@app.route("/api/quit", methods=["POST"])
+def api_quit():
+    """Stop the windowless engine cleanly, so a non-technical user never has
+    to find a terminal to close it. os._exit because this IS the app's stop
+    button — a local, single-purpose server."""
+    import threading
+    threading.Timer(0.3, lambda: os._exit(0)).start()
+    return jsonify({"ok": True})
+
+
 # ── Frontend ───────────────────────────────────────────────────────────────────
 
 HTML = r"""<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<title>Hermes Vault</title>
+<title>Forget-me-not</title>
+<link rel="icon" type="image/svg+xml" href="/favicon.svg">
 <script src="https://d3js.org/d3.v7.min.js"></script>
 <style>
 * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -600,7 +622,7 @@ select.fi { cursor:pointer; }
 </head>
 <body>
 <header>
-  <h1>◈ Hermes Vault</h1>
+  <h1><img src="/favicon.svg" width="18" height="18" style="vertical-align:-3px;image-rendering:pixelated" alt="">&nbsp;Forget-me-not</h1>
   <div class="tabs">
     <button class="tab active" data-tab="vault">Vault</button>
     <button class="tab" data-tab="quarantine">Quarantine</button>
@@ -610,7 +632,9 @@ select.fi { cursor:pointer; }
     <button class="tab" data-tab="recall">Recall Test</button>
   </div>
   <div id="stats">—</div>
-  <button class="recall-btn" onclick="triggerRecall()">↺ Update .hermes.md</button>
+  <button class="recall-btn" onclick="triggerRecall()">↺ Update morning note</button>
+  <button class="recall-btn" title="Stop Forget-me-not (the engine closes; reopen anytime)"
+          style="border-color:#5a3a3a" onclick="closeApp()">✕ Close</button>
 </header>
 <main>
   <!-- VAULT -->
@@ -1292,9 +1316,36 @@ async function triggerRecall() {
   btn.textContent = '↺ Running…'; btn.disabled = true;
   const r = await fetch('/api/trigger-recall',{method:'POST'});
   const d = await r.json();
-  btn.textContent = '↺ Update .hermes.md'; btn.disabled = false;
-  toast(d.ok ? '.hermes.md updated ✓' : 'Failed: ' + d.stderr.slice(0,80));
+  btn.textContent = '↺ Update morning note'; btn.disabled = false;
+  toast(d.ok ? 'Morning note updated ✓' : 'Failed: ' + d.stderr.slice(0,80));
 }
+
+async function closeApp() {
+  if (!confirm("Close Forget-me-not?\n\nThe memory engine stops. Your memories "
+    + "are safe on disk — reopen anytime by double-clicking Forget-me-not.")) return;
+  try { await fetch('/api/quit', {method:'POST'}); } catch(e) {}
+  document.body.innerHTML = '<div style="display:flex;height:100vh;'
+    + 'align-items:center;justify-content:center;color:var(--muted);'
+    + 'font-family:system-ui;font-size:16px;text-align:center">'
+    + '<div><img src="/favicon.svg" width="40" style="image-rendering:pixelated"><br><br>'
+    + 'Forget-me-not is closed.<br>You can close this tab.</div></div>';
+}
+
+// Live refresh: the panel should feel alive (Q remembers, the nightly runs) —
+// but never yank a card out from under someone mid-edit. Poll only when no
+// input is focused and the vault list is showing.
+let _liveTimer = setInterval(async () => {
+  const editing = ['INPUT','TEXTAREA','SELECT'].includes(
+    (document.activeElement||{}).tagName);
+  const vaultVisible = !document.getElementById('tab-vault').classList.contains('hidden');
+  if (editing || !vaultVisible || document.hidden) return;
+  try {
+    const r = await fetch('/api/graph'); const d = await r.json();
+    const fresh = (d.nodes||[]).filter(n => n.kind !== 'rollup').length;
+    const known = allNodes.filter(n => n.kind !== 'rollup').length;
+    if (fresh !== known) { await init(); toast('Memory updated ✓'); }
+  } catch(e) {}
+}, 8000);
 
 function esc(s) { return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
 function toast(msg, isError=false) {

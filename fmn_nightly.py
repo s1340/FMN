@@ -251,6 +251,12 @@ def main():
     # Connect the new cells: without build-edges they're islands (embedded but
     # no associative strings), starving constellation detection + navigation.
     _run([sys.executable, str(HERE / "memory_graph.py"), "build-edges"])
+    # Middle-layer rollups: closed days/weeks get their index signposts
+    # (mechanical, idempotent — a backfilled old day updates in place).
+    r = _run([sys.executable, str(HERE / "consolidate.py"), "build"])
+    for line in r.stdout.splitlines():
+        if line.startswith(("OK rollups", "!!")):
+            print("  " + line)
 
     pruned = prune_quarantine()
     print(f"[prune] {pruned} fully-admitted quarantine run(s) removed")

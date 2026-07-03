@@ -201,9 +201,12 @@ def fill_slots(graph: dict) -> dict[str, list[dict]]:
     #  - in_constellation: the episode is nested in a bond — the CONSTELLATION
     #    surfaces instead, so dozens of consolidated cells cost one slot, not
     #    dozens. Still fully searchable; reachable by expanding the album.
+    #  - rollups: calendar signposts (consolidate.py) are for search and the
+    #    timeline axis, never for boot slots — an index is not a memory.
     nodes = [n for n in graph["nodes"].values()
              if n.get("trust") != "flagged" and not n.get("muted")
-             and not n.get("in_constellation")]
+             and not n.get("in_constellation")
+             and n.get("kind") != "rollup"]
     scored = sorted(nodes, key=score_node, reverse=True)
     placed: set[str] = set()
     slots: dict[str, list[dict]] = {key: [] for key, *_ in SLOTS}

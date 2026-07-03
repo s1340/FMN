@@ -56,6 +56,7 @@ ROUTES = {
     "sign":          ("memory_sign.py", []),
     "panel":         ("vault_viz.py", []),
     "timeline":      ("memory_timeline.py", []),
+    "rollup":        ("consolidate.py", []),
 }
 
 

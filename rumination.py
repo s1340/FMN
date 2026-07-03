@@ -80,9 +80,10 @@ def meaningful_entities(node: dict, ubiquitous: set[str]) -> set[str]:
 
 def candidate_pairs(graph: dict) -> list[tuple[dict, dict, str]]:
     """Pairs worth an LLM look: shared meaningful entity, or >=2 shared topics.
-    Reflection cells are exempt (a changed mind is not a contradiction)."""
+    Reflection cells are exempt (a changed mind is not a contradiction);
+    rollups are indexes, not assertions — nothing to contradict."""
     nodes = [n for n in graph["nodes"].values()
-             if n.get("semantic_type") != "reflection"]
+             if n.get("semantic_type") not in ("reflection", "rollup")]
     n_total = len(nodes)
 
     freq: dict[str, int] = {}

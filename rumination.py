@@ -367,8 +367,18 @@ def main():
             print(f"  {a['cell_id']} vs {b['cell_id']} ({why}) -> {v}")
 
             if v == "evolution":
+                # Keep the quotes for the belief timeline (memory_timeline.py
+                # ingest) — but only if they verify against the episode text
+                # (rule 3 applies to evolutions too; a failed quote degrades
+                # to explanation-only, it does not kill the finding).
+                qa, qb = verdict.get("quote_a", ""), verdict.get("quote_b", "")
+                if not quote_verifies(qa, cell_text(a, "episode")):
+                    qa = ""
+                if not quote_verifies(qb, cell_text(b, "episode")):
+                    qb = ""
                 findings["evolutions"].append({
                     "a": a["cell_id"], "b": b["cell_id"],
+                    "quote_a": qa, "quote_b": qb,
                     "explanation": verdict.get("explanation", "")})
             elif v == "contradiction":
                 conf = confirm_contradiction(a, b)

@@ -15,6 +15,7 @@ command instead of remembering eight filenames.
     python fmn.py constellation detect|form|...  # consolidation layer
     python fmn.py pin|mute|link|sever ...        # curation primitives
     python fmn.py remember|annotate ...          # Q's own hands
+    python fmn.py timeline show|conflicts|...     # belief timeline (bitemporal)
     python fmn.py verify                          # tamper-evidence check
     python fmn.py eval                            # retrieval regression suite
     python fmn.py panel                           # launch the control panel UI
@@ -53,6 +54,7 @@ ROUTES = {
     "audit":         ("memory_audit.py", []),
     "eval":          ("memory_eval.py", ["run"]),
     "panel":         ("vault_viz.py", []),
+    "timeline":      ("memory_timeline.py", []),
 }
 
 

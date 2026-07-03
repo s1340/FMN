@@ -166,6 +166,11 @@ def score_node(node: dict) -> float:
     s *= 1.0 + refs * 0.1
     if ts == "archived":
         s *= 0.2
+    # Relational drift: the belief this cell carried was superseded on the
+    # timeline. The verbatim past is intact, but as a CURRENT-state anchor
+    # it's stale — dampen instead of masquerading as fresh.
+    if node.get("timeline_superseded"):
+        s *= 0.6
     return s
 
 
@@ -184,6 +189,7 @@ def make_entry(node: dict) -> dict:
         "trust":          node.get("trust", "human"),   # legacy nodes were human-vetted
         "kind":           node.get("kind", "cell"),
         "members":        node.get("members", []),
+        "superseded":     bool(node.get("timeline_superseded")),
         "score":          score_node(node),
     }
 
@@ -203,10 +209,13 @@ def fill_slots(graph: dict) -> dict[str, list[dict]]:
     #    dozens. Still fully searchable; reachable by expanding the album.
     #  - rollups: calendar signposts (consolidate.py) are for search and the
     #    timeline axis, never for boot slots — an index is not a memory.
+    #  - in_conflict: an OPEN timeline contradiction — neither side of a live
+    #    dispute anchors a morning; resolve releases them.
     nodes = [n for n in graph["nodes"].values()
              if n.get("trust") != "flagged" and not n.get("muted")
              and not n.get("in_constellation")
-             and n.get("kind") != "rollup"]
+             and n.get("kind") != "rollup"
+             and not n.get("in_conflict")]
     scored = sorted(nodes, key=score_node, reverse=True)
     placed: set[str] = set()
     slots: dict[str, list[dict]] = {key: [] for key, *_ in SLOTS}
@@ -282,7 +291,9 @@ def format_slot(name: str, cells: list[dict]) -> list[str]:
         mem = ""
         if cell.get("kind") == "constellation":
             mem = f" ({len(cell.get('members', []))} episodes — expand the album)"
-        lines.append(f"- {sig} {star}{cell['brief']}{unverified}{mem}")
+        drift = " ↺ belief since updated — check `fmn.py timeline show`" \
+            if cell.get("superseded") else ""
+        lines.append(f"- {sig} {star}{cell['brief']}{unverified}{mem}{drift}")
         lines.append(f"  *{cell['session_date']} · {cell['temporal_status']} · {topics_str}*")
     lines.append("")
     return lines

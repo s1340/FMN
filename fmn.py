@@ -54,6 +54,7 @@ ROUTES = {
     "audit":         ("memory_audit.py", []),
     "eval":          ("memory_eval.py", ["run"]),
     "sign":          ("memory_sign.py", []),
+    "stats":         ("memory_trust.py", ["stats"]),
     "panel":         ("vault_viz.py", []),
     "timeline":      ("memory_timeline.py", []),
     "rollup":        ("consolidate.py", []),

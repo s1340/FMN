@@ -360,14 +360,59 @@ def migrate_bright_pending() -> int:
 
 
 def stats() -> int:
+    """The trust_profile (consolidation-memory's idea, FMN's axes): one
+    readout answering 'how grounded is this vault right now?' — coverage,
+    contradiction pressure, drift posture. Automation stays inspectable."""
     graph = mg.load_graph()
+    nodes = graph["nodes"]
     tiers = {}
-    for n in graph["nodes"].values():
+    for n in nodes.values():
         tiers[n.get("trust", "untiered")] = tiers.get(n.get("trust", "untiered"), 0) + 1
-    print(f"Nodes: {len(graph['nodes'])}")
+    print(f"Nodes: {len(nodes)}")
     for t in ("human", "checked", "auto", "bright_pending", "flagged", "untiered"):
         if t in tiers:
             print(f"  {t:15s} {tiers[t]}")
+
+    n_total = len(nodes) or 1
+    hashed = sum(1 for n in nodes.values() if n.get("content_hash"))
+    provenanced = sum(1 for n in nodes.values()
+                      if n.get("session_id") and Path(str(n.get("file", ""))).exists())
+    signed = 0
+    try:
+        import memory_sign
+        if memory_sign.available():
+            latest = {}
+            for rec in memory_sign._read_log():
+                latest[rec["cell_id"]] = rec["content_hash"]
+            signed = sum(1 for cid, n in nodes.items()
+                         if n.get("content_hash")
+                         and latest.get(str(cid)) == n["content_hash"])
+    except Exception:
+        pass
+    print(f"\nCoverage:")
+    print(f"  sealed (sha256)   {hashed}/{len(nodes)} ({hashed/n_total:.0%})")
+    print(f"  signed (ed25519)  {signed}/{len(nodes)} ({signed/n_total:.0%})")
+    print(f"  provenance        {provenanced}/{len(nodes)} ({provenanced/n_total:.0%})"
+          f"  (session + file on disk)")
+
+    open_c = evo = 0
+    try:
+        import memory_timeline
+        state = memory_timeline.replay()
+        open_c = len(memory_timeline.open_conflicts(state))
+        evo = sum(1 for f in state["facts"].values()
+                  if f["retired"] and f["retired"].get("successor"))
+    except Exception:
+        pass
+    n_sup = sum(1 for n in nodes.values() if n.get("timeline_superseded"))
+    n_conf = sum(1 for n in nodes.values() if n.get("in_conflict"))
+    print(f"\nContradiction pressure:")
+    print(f"  open conflicts    {open_c}"
+          + ("   <- held from boot until resolved" if open_c else ""))
+    print(f"  beliefs evolved   {evo} (retired with successor)")
+    print(f"  drift markers     {n_sup} superseded, {n_conf} in-conflict")
+    if open_c >= 3 or (n_total > 50 and open_c / n_total > 0.02):
+        print("  !! pressure high — run rumination sooner than the weekly floor")
     return 0
 
 

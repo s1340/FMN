@@ -311,6 +311,8 @@ def do_ingest(report_path: Path | None) -> None:
     _mark_ingested(report_path.name)
     print(f"\nOK ingested {report_path.name}: "
           f"{n_evo} evolutions, {n_con} conflicts, {n_skip} already known")
+    if n_evo or n_con:
+        sync_graph_markers()
 
 
 def do_resolve(conflict_id: str, keep: str, by: str = "") -> bool:
@@ -339,7 +341,55 @@ def do_resolve(conflict_id: str, keep: str, by: str = "") -> bool:
     append_records([{"rec": "resolve", "id": conflict_id,
                      "keep": keep, "by": by}])
     print(f"OK resolved {conflict_id} (keep={keep})")
+    sync_graph_markers()
     return True
+
+
+# ── Relational drift sync (timeline -> graph markers) ─────────────────────────
+
+def sync_graph_markers() -> None:
+    """Make belief-change VISIBLE where recall happens (the consolidation-
+    memory 'drift' idea, code-anchors swapped for relational ones): a cell
+    whose fact was superseded gets timeline_superseded — boot recall dampens
+    and marks it ('the words are history, the belief moved on'); a cell in
+    an OPEN conflict gets in_conflict — held from boot entirely until a
+    person resolves (neither side of a live contradiction should anchor a
+    morning). Chunks are untouched — the verbatim past does not drift;
+    only its claim to be the CURRENT state does."""
+    state = replay()
+
+    active_src, retired_src = set(), set()
+    for f in state["facts"].values():
+        for c in f.get("sources", []):
+            (retired_src if f["retired"] else active_src).add(str(c))
+    superseded = retired_src - active_src   # newer fact from same cell wins
+
+    conflicted = set()
+    for c in open_conflicts(state):
+        conflicted.add(str(c.get("fact_a_cell", "")))
+        conflicted.add(str(c.get("fact_b_cell", "")))
+    conflicted.discard("")
+
+    sys.path.insert(0, str(Path(__file__).parent))
+    from memory_graph import locked_graph
+    n_sup = n_con = n_clear = 0
+    with locked_graph() as graph:
+        for cid, node in graph["nodes"].items():
+            cid = str(cid)
+            if cid in superseded and not node.get("timeline_superseded"):
+                node["timeline_superseded"] = True
+                n_sup += 1
+            elif cid not in superseded and node.get("timeline_superseded"):
+                node.pop("timeline_superseded", None)
+                n_clear += 1
+            if cid in conflicted and not node.get("in_conflict"):
+                node["in_conflict"] = True
+                n_con += 1
+            elif cid not in conflicted and node.get("in_conflict"):
+                node.pop("in_conflict", None)
+                n_clear += 1
+    print(f"OK drift sync: {n_sup} superseded, {n_con} in-conflict, "
+          f"{n_clear} cleared")
 
 
 # ── Views ──────────────────────────────────────────────────────────────────────
@@ -398,7 +448,7 @@ def main():
     ap = argparse.ArgumentParser(description="Bitemporal belief timeline")
     ap.add_argument("command", choices=[
         "assert", "retire", "supersede", "ingest", "conflicts",
-        "resolve", "show", "as-of", "verify"])
+        "resolve", "show", "as-of", "verify", "sync"])
     ap.add_argument("args", nargs="*")
     ap.add_argument("--subject", default="")
     ap.add_argument("--valid-from", default="")
@@ -449,6 +499,8 @@ def main():
     elif a.command == "verify":
         if not verify_chain():
             sys.exit(1)
+    elif a.command == "sync":
+        sync_graph_markers()
 
 
 if __name__ == "__main__":

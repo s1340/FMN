@@ -429,14 +429,32 @@ def touch_cell(graph: dict, cell_id: str, corrected: bool = False) -> None:
 
 # ── Retrieval ─────────────────────────────────────────────────────────────────
 
-def query_graph(text: str, graph: dict, limit: int = 10, touch: bool = False) -> list[dict]:
+def query_graph(text: str, graph: dict, limit: int = 10, touch: bool = False,
+                depth: str = "auto") -> list[dict]:
     """Find relevant cells for an incoming message.
 
-    Hybrid scoring: keyword/topic/entity matching (predictable, cannot
-    hallucinate similarity) + semantic cosine from the FMN embedding layer
-    (adds paraphrase recall). Embeddings degrade gracefully to keyword-only.
+    Hybrid scoring: topic/entity matching (predictable, cannot hallucinate
+    similarity) + BM25 over in-graph text (IDF-weighted keyword channel) +
+    semantic cosine from the FMN embedding layer (paraphrase recall). Both
+    learned channels degrade gracefully to the mechanical ones.
+
+    depth: complexity-aware recall (recall_planner, heuristic — never an LLM
+    on this path). "auto" classifies the query; or force simple/hybrid/complex.
+    Depth scales BREADTH only (result limit, expansion seeds) — scoring is
+    identical across depths, so a misclassified query still gets its direct
+    hits, just fewer/more neighbors.
     """
     text_lower = text.lower()
+
+    # Recall plan (graceful: no planner module -> classic behavior)
+    rp, the_plan = None, None
+    try:
+        import recall_planner as rp
+        the_plan = (rp.plan(text) if depth == "auto"
+                    else {"complexity": depth, **rp.PLANS[depth]})
+        limit = max(limit, int(limit * the_plan["limit_mult"]))
+    except Exception:
+        the_plan = None
 
     # Semantic layer (optional). Potion cosines are low-range (good match
     # ~0.27, noise floor ~0.20) — absolute thresholds don't separate; RANK
@@ -449,6 +467,16 @@ def query_graph(text: str, graph: dict, limit: int = 10, touch: bool = False) ->
                    sorted(sem.items(), key=lambda x: -x[1])[:5] if s >= 0.18}
     except Exception:
         sem = {}
+
+    # BM25 channel (rank-normalized like the semantic channel: raw BM25
+    # magnitudes swing with corpus stats, so the top hit anchors the scale)
+    bm25 = {}
+    if rp is not None:
+        try:
+            bm25 = rp.bm25_scores(text, graph["nodes"])
+        except Exception:
+            bm25 = {}
+    bm25_max = max(bm25.values()) if bm25 else 0.0
 
     # Score each node by keyword overlap
     scored = []
@@ -477,11 +505,19 @@ def query_graph(text: str, graph: dict, limit: int = 10, touch: bool = False) ->
                 score += 3.0
                 matched.append(f"entity:{entity}")
 
-        # Brief keyword matches
-        brief_lower = node.get("brief", "").lower()
-        for word in text_lower.split():
-            if len(word) > 4 and word in brief_lower:
-                score += 0.5
+        # Text channel. BM25 when available (IDF-weighted — a rare word
+        # matching is worth more than "memory" matching everything); the old
+        # flat +0.5-per-word loop only as fallback.
+        if bm25_max > 0:
+            b = bm25.get(node["cell_id"], 0.0)
+            if b > 0:
+                score += 2.5 * (b / bm25_max)
+                matched.append(f"bm25:{b/bm25_max:.2f}")
+        else:
+            brief_lower = node.get("brief", "").lower()
+            for word in text_lower.split():
+                if len(word) > 4 and word in brief_lower:
+                    score += 0.5
 
         if score > 0:
             # Boost: bright cells get 2x, high gets 1.5x
@@ -509,9 +545,12 @@ def query_graph(text: str, graph: dict, limit: int = 10, touch: bool = False) ->
 
     scored.sort(key=lambda x: x["score"], reverse=True)
 
-    # Graph expansion: for top matches, pull in connected nodes
+    # Graph expansion: for top matches, pull in connected nodes. Expansion
+    # breadth scales with query complexity (a relational question deserves
+    # more neighborhood; a lookup doesn't need it).
+    expand_top = the_plan["expand_top"] if the_plan else 3
     expanded = set()
-    top_ids = [s["cell_id"] for s in scored[:3]]
+    top_ids = [s["cell_id"] for s in scored[:expand_top]]
     for edge in graph["edges"]:
         if edge["a"] in top_ids and edge["b"] not in top_ids:
             node = graph["nodes"].get(edge["b"])
@@ -535,13 +574,31 @@ def query_graph(text: str, graph: dict, limit: int = 10, touch: bool = False) ->
 
     results = scored[:limit]
 
+    # Complex queries get the living-portrait signpost: the profile layer is
+    # the deepest answer to "who is she / who am I" questions. A signpost,
+    # not content — the reader runs `fmn.py profile show` (THE ONE LAW's
+    # expand-before-acting, applied to identity).
+    if the_plan and the_plan.get("consult_profile"):
+        profile_dir = VAULT_ROOT / "60_PROFILE"
+        live = [p.stem for p in profile_dir.glob("personal_*.md")] \
+            if profile_dir.exists() else []
+        if live:
+            results.append({
+                "cell_id": "(profile)", "score": 0.0,
+                "matched": [f"planner:{the_plan['complexity']}"],
+                "brief": "Relational query — consult the living portrait(s): "
+                         + ", ".join(sorted(live))
+                         + "  (fmn.py profile show <subject>)",
+                "significance": "signpost", "temporal_status": "-"})
+
     # Write-back: retrieval is the verification loop. Every surfaced cell is
     # touched — referenced_count grows (forgetting reads it), and gray 'auto'
     # cells that get used earn 'checked'. Off by default so read-only queries
     # (rumination, eval) don't mutate trust; the dynamic-recall skill sets it.
     if touch:
         for r in results:
-            touch_cell(graph, r["cell_id"])
+            if r["cell_id"] in graph["nodes"]:
+                touch_cell(graph, r["cell_id"])
 
     return results
 
@@ -648,6 +705,9 @@ def main():
     parser.add_argument("--limit", type=int, default=10)
     parser.add_argument("--no-touch", action="store_true",
                         help="query without write-back (read-only; for eval/rumination)")
+    parser.add_argument("--depth", default="auto",
+                        choices=["auto", "simple", "hybrid", "complex"],
+                        help="recall depth (auto = heuristic classification)")
     args = parser.parse_args()
 
     if args.command == "init":
@@ -697,7 +757,7 @@ def main():
             sys.exit(1)
         graph = load_graph()
         results = query_graph(" ".join(args.args), graph, limit=args.limit,
-                              touch=not args.no_touch)
+                              touch=not args.no_touch, depth=args.depth)
         graph["metadata"]["total_retrievals"] += 1
         save_graph(graph)
         print(f"Top {len(results)} matches:")

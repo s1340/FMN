@@ -1,0 +1,1198 @@
+#!/usr/bin/env python3
+"""
+vault_viz.py — Hermes memory vault visualization and editing tool.
+
+Features:
+  - Browse and filter all memory cells by type, significance, flags
+  - View brief, episode, and full chunk for any cell
+  - Edit brief, episode, semantic_type, significance, valence, topics,
+    reflection_candidate in-browser
+  - Mark bright with one click
+  - Review and approve quarantine cells
+  - Preview 7-slot boot context
+  - Trigger vault_recall to update .hermes.md
+
+Usage:
+    python vault_viz.py            # http://localhost:5173
+    python vault_viz.py --port N
+"""
+
+import argparse
+import json
+import os
+import re
+import subprocess
+import sys
+from datetime import datetime, timezone
+from pathlib import Path
+
+try:
+    from flask import Flask, jsonify, request, render_template_string
+except ImportError:
+    print("Flask not found. Install with: pip install flask", file=sys.stderr)
+    sys.exit(1)
+
+try:
+    import yaml
+except ImportError:
+    print("PyYAML not found. Install with: pip install pyyaml", file=sys.stderr)
+    sys.exit(1)
+
+# ── Config ─────────────────────────────────────────────────────────────────────
+
+VAULT_ROOT = Path(os.environ.get("MEMORY_VAULT_ROOT",
+                                  r"C:\Users\User\Documents\Obsidian Vault"))
+GRAPH_FILE = VAULT_ROOT / "30_EPISODES" / "graph.json"
+NODES_DIR  = VAULT_ROOT / "30_EPISODES" / "nodes"
+QUARANTINE = VAULT_ROOT / "90_ARCHIVE" / "session_cells_quarantine"
+
+FRONTMATTER_RE = re.compile(r"^---\n(.*?)\n---\n(.*)$", re.DOTALL)
+
+app = Flask(__name__)
+app.config["JSON_SORT_KEYS"] = False
+
+
+# ── File helpers ───────────────────────────────────────────────────────────────
+
+# The panel routes through memory_graph's locked, atomic writer so it can't
+# clobber Q's live tools / cron (the race Q found). Mutating endpoints wrap
+# their read-modify-write in `with mg.locked_graph() as graph:`.
+import memory_graph as _mg
+
+
+def load_graph() -> dict:
+    return _mg.load_graph()
+
+
+def save_graph(graph: dict) -> None:
+    _mg.save_graph(graph)
+
+
+locked_graph = _mg.locked_graph
+graph_lock = _mg.graph_lock
+
+
+def parse_cell_file(path: Path) -> dict:
+    text = path.read_text(encoding="utf-8")
+    m = FRONTMATTER_RE.match(text)
+    if not m:
+        return {"frontmatter": {}, "brief": "", "episode": "", "chunk": ""}
+    fm = yaml.safe_load(m.group(1))
+    body = m.group(2)
+    sections: dict = {"brief": "", "episode": "", "chunk": ""}
+    current = None
+    for line in body.splitlines():
+        s = line.strip()
+        if s == "## Brief":     current = "brief"
+        elif s == "## Episode": current = "episode"
+        elif s == "## Chunk":   current = "chunk"
+        elif current:           sections[current] += line + "\n"
+    return {
+        "frontmatter": fm or {},
+        "brief":   sections["brief"].strip(),
+        "episode": sections["episode"].strip(),
+        "chunk":   sections["chunk"].strip(),
+    }
+
+
+def write_cell_file(path: Path, fm: dict, brief: str, episode: str, chunk: str) -> None:
+    lines = ["---"]
+    for k, v in fm.items():
+        if isinstance(v, (list, dict)):
+            lines.append(f"{k}: {json.dumps(v)}")
+        elif isinstance(v, bool):
+            lines.append(f"{k}: {str(v).lower()}")
+        else:
+            lines.append(f"{k}: {v}")
+    lines.append("---")
+    body = f"\n## Brief\n{brief}\n\n## Episode\n{episode}\n\n## Chunk\n{chunk}\n"
+    path.write_text("\n".join(lines) + body, encoding="utf-8")
+
+
+# ── API routes ─────────────────────────────────────────────────────────────────
+
+@app.route("/api/graph")
+def api_graph():
+    graph = load_graph()
+    sig_order = {"bright": 0, "high": 1, "medium": 2, "low": 3}
+    nodes = sorted(
+        graph["nodes"].values(),
+        key=lambda n: (sig_order.get(n.get("significance", "medium"), 2),
+                       n.get("session_date", ""))
+    )
+    n_bright = sum(1 for n in nodes if n.get("significance") == "bright")
+    n_refl   = sum(1 for n in nodes if n.get("reflection_candidate"))
+    trust_counts: dict = {}
+    for n in nodes:
+        t = n.get("trust", "untiered")
+        trust_counts[t] = trust_counts.get(t, 0) + 1
+    return jsonify({
+        "nodes":    nodes,
+        "edges":    graph.get("edges", []),
+        "metadata": graph.get("metadata", {}),
+        "n_bright": n_bright,
+        "n_refl":   n_refl,
+        "trust":    trust_counts,
+    })
+
+
+@app.route("/api/integrity")
+def api_integrity():
+    """Tamper-evidence status for the header: intact / drifted / unhashed."""
+    graph = load_graph()
+    try:
+        from memory_trust import cell_content_hash
+    except Exception:
+        return jsonify({"available": False})
+    ok, drifted, unhashed = 0, [], 0
+    for cid, node in graph["nodes"].items():
+        stored = node.get("content_hash")
+        if not stored:
+            unhashed += 1
+            continue
+        p = Path(node.get("file", ""))
+        if not p.exists():
+            drifted.append(cid)
+            continue
+        try:
+            cur = cell_content_hash(parse_cell_file(p))
+        except Exception:
+            drifted.append(cid)
+            continue
+        if cur == stored:
+            ok += 1
+        else:
+            drifted.append(cid)
+    return jsonify({"available": True, "intact": ok,
+                    "drifted": drifted, "unhashed": unhashed})
+
+
+@app.route("/api/cell/<cell_id>")
+def api_cell(cell_id: str):
+    graph = load_graph()
+    node = graph["nodes"].get(cell_id)
+    if not node:
+        return jsonify({"error": "not found"}), 404
+    node = dict(node)
+    file_path = node.get("file")
+    if file_path and Path(file_path).exists():
+        cell_data = parse_cell_file(Path(file_path))
+        node["chunk"]   = cell_data.get("chunk", "")
+        node["brief"]   = cell_data.get("brief", node.get("brief", ""))
+        node["episode"] = cell_data.get("episode", node.get("episode", ""))
+    else:
+        node["chunk"] = "(file not found)"
+    return jsonify(node)
+
+
+@app.route("/api/cell/<cell_id>", methods=["PUT"])
+def api_cell_update(cell_id: str):
+    data = request.json or {}
+    editable = ["brief", "episode", "significance", "valence",
+                "semantic_type", "reflection_candidate", "topics", "trust"]
+    with graph_lock():                       # under the lock — no clobber
+        graph = load_graph()
+        node = graph["nodes"].get(cell_id)
+        if not node:
+            return jsonify({"error": "not found"}), 404
+        for field in editable:
+            if field in data:
+                node[field] = data[field]
+
+        file_path = node.get("file")
+        if file_path and Path(file_path).exists():
+            cell_data = parse_cell_file(Path(file_path))
+            fm = cell_data["frontmatter"]
+            for field in editable:
+                if field in data and field not in ("brief", "episode"):
+                    fm[field] = data[field]
+            new_brief   = data.get("brief",   cell_data["brief"])
+            new_episode = data.get("episode", cell_data["episode"])
+            write_cell_file(Path(file_path), fm,
+                            new_brief, new_episode, cell_data["chunk"])
+            # Re-stamp the tamper-evidence seal (sanctioned edit path).
+            try:
+                from memory_trust import content_hash
+                node["content_hash"] = content_hash(new_brief, new_episode,
+                                                    cell_data["chunk"])
+            except Exception:
+                pass
+            # A human edit through the panel IS human verification.
+            if "trust" not in data and node.get("trust") in ("auto", "checked"):
+                node["trust"] = "human"
+        save_graph(graph)
+        trust_out = node.get("trust")
+    return jsonify({"ok": True, "cell_id": cell_id, "trust": trust_out})
+
+
+@app.route("/api/curate", methods=["POST"])
+def api_curate():
+    """Pin, mute, link, sever — Mal's hands on the graph, live. Under the lock
+    so it can't clobber Q's concurrent tools / cron."""
+    import memory_curate as mc
+    data = request.json or {}
+    action = data.get("action")
+    if action not in ("pin", "mute", "link", "sever"):
+        return jsonify({"error": f"unknown action {action}"}), 400
+    err, removed = None, None
+    with graph_lock():                       # save only on success, all locked
+        graph = load_graph()
+        if action == "pin":
+            err = mc.set_pin(graph, data.get("cell_id", ""), on=bool(data.get("on", True)))
+        elif action == "mute":
+            err = mc.set_mute(graph, data.get("cell_id", ""), on=bool(data.get("on", True)))
+        elif action == "link":
+            err = mc.link_cells(graph, data.get("a", ""), data.get("b", ""),
+                                note=data.get("note", ""), by="panel")
+        elif action == "sever":
+            removed = mc.sever_edge(graph, data.get("a", ""), data.get("b", ""),
+                                    data.get("type", "*"), by="panel")
+        if not err:
+            save_graph(graph)
+    if err:
+        return jsonify({"error": err}), 400
+    if action == "sever":
+        return jsonify({"ok": True, "removed": removed})
+    return jsonify({"ok": True})
+
+
+@app.route("/api/query")
+def api_query():
+    """Live retrieval tester: exactly what Q's dynamic recall would fetch.
+    Read-only (touch=False) — testing must not manufacture trust."""
+    from memory_graph import query_graph
+    q = request.args.get("q", "").strip()
+    if not q:
+        return jsonify({"results": []})
+    graph = load_graph()
+    results = query_graph(q, graph, limit=8, touch=False)
+    return jsonify({"results": results})
+
+
+@app.route("/api/quarantine")
+def api_quarantine():
+    if not QUARANTINE.exists():
+        return jsonify({"runs": []})
+    runs = []
+    for run_dir in sorted(QUARANTINE.iterdir(), reverse=True):
+        if not run_dir.is_dir():
+            continue
+        cells = []
+        for f in sorted(run_dir.glob("*.md")):
+            if f.name.startswith("merge_proposals"):
+                continue
+            try:
+                cd = parse_cell_file(f)
+                fm = cd["frontmatter"]
+                cells.append({
+                    "cell_id":             fm.get("cell_id"),
+                    "path":                str(f),
+                    "topics":              fm.get("topics", []),
+                    "significance":        fm.get("significance", "medium"),
+                    "valence":             fm.get("valence", "neutral"),
+                    "semantic_type":       fm.get("semantic_type", ""),
+                    "reflection_candidate": bool(fm.get("reflection_candidate", False)),
+                    "session_date":        fm.get("session_date", ""),
+                    "brief":               cd.get("brief", ""),
+                    "episode":             cd.get("episode", ""),
+                })
+            except Exception as e:
+                cells.append({"error": str(e), "path": str(f)})
+        if cells:
+            runs.append({"run_id": run_dir.name, "cells": cells})
+    return jsonify({"runs": runs})
+
+
+@app.route("/api/approve/<cell_id>", methods=["POST"])
+def api_approve(cell_id: str):
+    data = request.json or {}
+    run_id = data.get("run_id")
+
+    if run_id:
+        source = QUARANTINE / run_id
+    else:
+        dirs = sorted((d for d in QUARANTINE.iterdir() if d.is_dir()), reverse=True)
+        source = dirs[0] if dirs else None
+
+    if not source or not source.exists():
+        return jsonify({"error": "quarantine run not found"}), 404
+
+    cell_path = cell_data = None
+    for f in source.glob("*.md"):
+        if f.name.startswith("merge_proposals"):
+            continue
+        try:
+            cd = parse_cell_file(f)
+            if cd["frontmatter"].get("cell_id") == cell_id:
+                cell_path, cell_data = f, cd
+                break
+        except Exception:
+            continue
+
+    if not cell_path:
+        return jsonify({"error": f"cell {cell_id} not found"}), 404
+
+    NODES_DIR.mkdir(parents=True, exist_ok=True)
+    node_path = NODES_DIR / cell_path.name
+    node_path.write_text(cell_path.read_text(encoding="utf-8"), encoding="utf-8")
+
+    graph = load_graph()
+    if "metadata" not in graph:
+        graph["metadata"] = {"total_approvals": 0, "total_retrievals": 0}
+
+    fm = cell_data["frontmatter"]
+    graph["nodes"][cell_id] = {
+        "cell_id":              cell_id,
+        "session_id":           fm.get("session_id"),
+        "session_date":         fm.get("session_date"),
+        "created":              fm.get("created", datetime.now(timezone.utc).isoformat()),
+        "topics":               fm.get("topics", []),
+        "entities":             fm.get("entities", []),
+        "significance":         fm.get("significance", "medium"),
+        "valence":              fm.get("valence", "neutral"),
+        "novelty":              fm.get("novelty", "routine"),
+        "semantic_type":        fm.get("semantic_type", "work_research"),
+        "reflection_candidate": bool(fm.get("reflection_candidate", False)),
+        "brief":                cell_data["brief"],
+        "episode":              cell_data["episode"],
+        "temporal_status":      "fresh",
+        "referenced_count":     0,
+        "last_referenced":      None,
+        "approved_at":          datetime.now(timezone.utc).isoformat(),
+        "neighbors":            fm.get("neighbors", []),
+        "file":                 str(node_path),
+    }
+    graph["metadata"]["total_approvals"] = \
+        graph["metadata"].get("total_approvals", 0) + 1
+    save_graph(graph)
+    return jsonify({"ok": True, "cell_id": cell_id})
+
+
+@app.route("/api/boot-slots")
+def api_boot_slots():
+    try:
+        import importlib
+        sys.path.insert(0, str(Path(__file__).parent))
+        import vault_recall
+        importlib.reload(vault_recall)
+        graph = vault_recall.load_graph()
+        vault_recall.age_graph(graph)
+        slots = vault_recall.fill_slots(graph)
+        return jsonify({
+            key: {"name": name, "max": max_n, "cells": slots[key]}
+            for key, name, max_n, _ in vault_recall.SLOTS
+        })
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/trigger-recall", methods=["POST"])
+def api_trigger_recall():
+    result = subprocess.run(
+        [sys.executable, str(Path(__file__).parent / "vault_recall.py")],
+        capture_output=True, text=True,
+    )
+    return jsonify({
+        "ok":     result.returncode == 0,
+        "stdout": result.stdout,
+        "stderr": result.stderr,
+    })
+
+
+# ── Frontend ───────────────────────────────────────────────────────────────────
+
+HTML = r"""<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Hermes Vault</title>
+<script src="https://d3js.org/d3.v7.min.js"></script>
+<style>
+* { box-sizing: border-box; margin: 0; padding: 0; }
+:root {
+  --bg: #0d0d0d; --surface: #161616; --surface2: #1e1e1e;
+  --border: #2a2a2a; --text: #e0e0e0; --muted: #666;
+  --accent: #4a9eff; --bright: #f5c842;
+  --rel: #c792ea; --work: #82aaff; --corr: #f07178;
+  --refl: #c3e88d; --env: #89ddff; --pmal: #ffcb6b; --pq: #ff5370;
+}
+body { background:var(--bg); color:var(--text); font-family:'JetBrains Mono','Fira Code',monospace; font-size:13px; height:100vh; display:flex; flex-direction:column; }
+header { padding:10px 18px; background:var(--surface); border-bottom:1px solid var(--border); display:flex; align-items:center; gap:14px; flex-shrink:0; }
+h1 { font-size:13px; color:var(--accent); letter-spacing:.05em; white-space:nowrap; }
+.tabs { display:flex; gap:3px; }
+.tab { padding:5px 12px; border:1px solid var(--border); background:var(--bg); color:var(--muted); cursor:pointer; border-radius:3px; font-size:11px; font-family:inherit; }
+.tab.active { background:var(--accent); color:#000; border-color:var(--accent); }
+#stats { font-size:11px; color:var(--muted); white-space:nowrap; }
+.recall-btn { margin-left:auto; padding:5px 12px; background:#1a3a1a; border:1px solid #2d5a2d; color:#4caf50; cursor:pointer; border-radius:3px; font-size:11px; font-family:inherit; white-space:nowrap; }
+.recall-btn:hover { background:#2d5a2d; }
+main { display:flex; flex:1; overflow:hidden; }
+/* sidebar */
+.sidebar { width:320px; min-width:240px; border-right:1px solid var(--border); display:flex; flex-direction:column; overflow:hidden; flex-shrink:0; }
+.filters { padding:8px 10px; border-bottom:1px solid var(--border); display:flex; flex-wrap:wrap; gap:4px; }
+.fb { padding:2px 7px; border:1px solid var(--border); background:var(--bg); color:var(--muted); cursor:pointer; border-radius:3px; font-size:11px; font-family:inherit; }
+.fb.on { border-color:var(--accent); color:var(--accent); }
+.cell-list { flex:1; overflow-y:auto; }
+.ci { padding:9px 11px; border-bottom:1px solid var(--border); cursor:pointer; }
+.ci:hover { background:var(--surface); }
+.ci.sel { background:var(--surface2); border-left:3px solid var(--accent); padding-left:8px; }
+.ci-meta { display:flex; gap:5px; align-items:center; margin-bottom:3px; flex-wrap:wrap; }
+.sb { font-size:10px; padding:1px 5px; border-radius:2px; font-weight:bold; white-space:nowrap; }
+.s-bright { background:var(--bright); color:#000; }
+.s-high   { background:#7ecfff; color:#000; }
+.s-medium { background:var(--surface2); color:#a0a0a0; border:1px solid var(--border); }
+.s-low    { background:var(--bg); color:#555; border:1px solid var(--border); }
+.tb { font-size:10px; padding:1px 5px; border-radius:2px; }
+.t-relationship     { background:#2a1a3a; color:var(--rel); }
+.t-work_research    { background:#1a1a3a; color:var(--work); }
+.t-correction       { background:#2a1a1a; color:var(--corr); }
+.t-reflection       { background:#1a2a1a; color:var(--refl); }
+.t-environment_tools{ background:#1a2a2a; color:var(--env); }
+.t-personal_mal     { background:#2a2a1a; color:var(--pmal); }
+.t-personal_q       { background:#2a1a1a; color:var(--pq); }
+.rdot { width:6px; height:6px; border-radius:50%; background:var(--refl); display:inline-block; flex-shrink:0; }
+.trb { font-size:10px; padding:1px 4px; border-radius:2px; white-space:nowrap; }
+.tr-flagged { background:#3a1a1a; color:#ff6b6b; border:1px solid #5a2d2d; }
+.tr-auto    { background:var(--bg); color:#888; border:1px solid var(--border); }
+.tr-checked { background:#1a2a1a; color:#4caf50; }
+.tr-human   { background:#1a3a1a; color:#4caf50; font-weight:bold; }
+.ci-brief { font-size:11px; line-height:1.4; color:var(--text); display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; overflow:hidden; }
+.ci-date { font-size:10px; color:var(--muted); margin-top:3px; }
+/* detail */
+.detail { flex:1; display:flex; flex-direction:column; overflow:hidden; }
+.dh { padding:12px 18px; background:var(--surface); border-bottom:1px solid var(--border); display:flex; align-items:center; gap:8px; flex-shrink:0; }
+.did { font-size:11px; color:var(--muted); font-family:monospace; }
+.bri-btn { padding:3px 9px; border:1px solid var(--bright); background:transparent; color:var(--bright); cursor:pointer; border-radius:3px; font-size:11px; font-family:inherit; }
+.bri-btn.on { background:var(--bright); color:#000; }
+.pin-btn, .mute-btn { padding:3px 9px; border:1px solid var(--border); background:transparent; color:var(--muted); cursor:pointer; border-radius:3px; font-size:11px; font-family:inherit; }
+.pin-btn.on { background:#2a2a1a; color:var(--bright); border-color:var(--bright); }
+.mute-btn.on { background:#2a1a1a; color:#ff9a6b; border-color:#5a3a2d; }
+.cutb { background:transparent; border:none; color:#a05a5a; cursor:pointer; font-size:11px; padding:0 3px; }
+.cutb:hover { color:#ff6b6b; }
+.linkb { background:transparent; border:1px solid var(--border); color:var(--accent); cursor:pointer; font-size:10px; border-radius:3px; padding:1px 6px; margin-left:6px; font-family:inherit; }
+/* retrieval tester */
+.tview { flex:1; overflow-y:auto; padding:18px; }
+.qtest-box { display:flex; gap:8px; margin-bottom:16px; }
+.qtest-in { flex:1; background:var(--surface); border:1px solid var(--border); color:var(--text); padding:9px 11px; border-radius:3px; font-family:inherit; font-size:13px; }
+.qtest-in:focus { outline:none; border-color:var(--accent); }
+.qr { background:var(--surface); border:1px solid var(--border); border-radius:3px; margin-bottom:6px; padding:10px; cursor:pointer; }
+.qr:hover { background:var(--surface2); }
+.qr-score { font-family:monospace; color:var(--accent); font-size:11px; }
+.qr-matched { font-size:10px; color:var(--muted); margin-top:3px; }
+.save-btn { margin-left:auto; padding:4px 14px; background:var(--accent); border:none; color:#000; cursor:pointer; border-radius:3px; font-size:12px; font-weight:bold; font-family:inherit; }
+.save-btn:hover { opacity:.85; }
+.db { flex:1; overflow-y:auto; padding:18px; display:flex; flex-direction:column; gap:14px; }
+.fg { display:flex; flex-direction:column; gap:5px; }
+.fl { font-size:10px; color:var(--muted); text-transform:uppercase; letter-spacing:.05em; }
+.fi { background:var(--surface); border:1px solid var(--border); color:var(--text); padding:7px 9px; border-radius:3px; font-family:inherit; font-size:12px; resize:vertical; width:100%; }
+.fi:focus { outline:none; border-color:var(--accent); }
+select.fi { cursor:pointer; }
+.row { display:flex; gap:10px; }
+.row .fg { flex:1; }
+.chunk { background:var(--surface); border:1px solid var(--border); padding:10px; border-radius:3px; font-size:11px; color:var(--muted); white-space:pre-wrap; max-height:280px; overflow-y:auto; line-height:1.5; }
+.rtog { display:flex; align-items:center; gap:7px; cursor:pointer; font-size:12px; }
+.rtog input { cursor:pointer; }
+.empty { flex:1; display:flex; align-items:center; justify-content:center; color:var(--muted); }
+/* quarantine */
+.qview { flex:1; overflow-y:auto; padding:18px; }
+.rg { margin-bottom:20px; }
+.rt { font-size:11px; color:var(--muted); margin-bottom:8px; padding-bottom:5px; border-bottom:1px solid var(--border); }
+.qc { background:var(--surface); border:1px solid var(--border); border-radius:3px; margin-bottom:6px; padding:10px; }
+.qch { display:flex; gap:7px; align-items:center; margin-bottom:6px; flex-wrap:wrap; }
+.qb { font-size:12px; margin-bottom:5px; }
+.qe { font-size:11px; color:var(--muted); margin-bottom:8px; display:none; line-height:1.5; }
+.qe.open { display:block; }
+.qa { display:flex; gap:6px; }
+.appr { padding:3px 10px; background:#1a3a1a; border:1px solid #2d5a2d; color:#4caf50; cursor:pointer; border-radius:3px; font-size:11px; font-family:inherit; }
+.appr:hover { background:#2d5a2d; }
+.exbtn { padding:3px 7px; background:var(--bg); border:1px solid var(--border); color:var(--muted); cursor:pointer; border-radius:3px; font-size:11px; font-family:inherit; }
+/* slots */
+.sview { flex:1; overflow-y:auto; padding:18px; display:grid; grid-template-columns:1fr 1fr; gap:14px; align-content:start; }
+.sc { background:var(--surface); border:1px solid var(--border); border-radius:4px; padding:12px; }
+.sn { font-size:11px; color:var(--accent); margin-bottom:8px; display:flex; justify-content:space-between; }
+.scnt { color:var(--muted); font-size:10px; }
+.scell { padding:7px 0; border-bottom:1px solid var(--border); }
+.scell:last-child { border-bottom:none; }
+.sbr { font-size:11px; line-height:1.4; }
+.smt { font-size:10px; color:var(--muted); margin-top:2px; }
+.semp { color:var(--muted); font-size:11px; font-style:italic; }
+/* graph */
+.gview { flex:1; display:flex; overflow:hidden; }
+#graph-svg { flex:1; background:var(--bg); }
+.graph-detail { width:300px; border-left:1px solid var(--border); overflow-y:auto; display:flex; flex-direction:column; }
+.tooltip { position:absolute; background:var(--surface2); border:1px solid var(--border); color:var(--text); padding:8px 12px; border-radius:3px; font-size:11px; pointer-events:none; max-width:340px; line-height:1.5; z-index:10; display:none; word-wrap:break-word; }
+.legend { position:absolute; bottom:16px; left:16px; background:var(--surface); border:1px solid var(--border); border-radius:4px; padding:10px 12px; font-size:11px; }
+.legend-row { display:flex; align-items:center; gap:7px; margin-bottom:4px; }
+.legend-row:last-child { margin-bottom:0; }
+.leg-dot { width:10px; height:10px; border-radius:50%; flex-shrink:0; }
+.leg-line { width:20px; height:2px; flex-shrink:0; }
+.neigh { padding:12px 14px; border-top:1px solid var(--border); }
+.neigh-title { font-size:10px; color:var(--muted); text-transform:uppercase; letter-spacing:.05em; margin-bottom:8px; }
+.neigh-item { padding:6px 0; border-bottom:1px solid var(--border); cursor:pointer; }
+.neigh-item:hover { color:var(--accent); }
+.neigh-item:last-child { border-bottom:none; }
+.neigh-type { font-size:10px; color:var(--muted); margin-bottom:2px; }
+.neigh-brief { font-size:11px; line-height:1.3; }
+/* quarantine toolbar */
+.qtoolbar { padding:8px 10px; border-bottom:1px solid var(--border); display:flex; gap:6px; align-items:center; flex-shrink:0; }
+.qtoolbar > span { font-size:10px; color:var(--muted); }
+/* scrollbar */
+::-webkit-scrollbar { width:5px; }
+::-webkit-scrollbar-track { background:var(--bg); }
+::-webkit-scrollbar-thumb { background:var(--border); border-radius:3px; }
+.hidden { display:none !important; }
+.toast { position:fixed; bottom:18px; right:18px; background:var(--surface2); border:1px solid var(--border); color:var(--text); padding:8px 14px; border-radius:3px; font-size:12px; opacity:0; transition:opacity .2s; pointer-events:none; z-index:999; }
+.toast.show { opacity:1; }
+</style>
+</head>
+<body>
+<header>
+  <h1>◈ Hermes Vault</h1>
+  <div class="tabs">
+    <button class="tab active" data-tab="vault">Vault</button>
+    <button class="tab" data-tab="quarantine">Quarantine</button>
+    <button class="tab" data-tab="slots">Boot Slots</button>
+    <button class="tab" data-tab="graph">Graph</button>
+    <button class="tab" data-tab="recall">Recall Test</button>
+  </div>
+  <div id="stats">—</div>
+  <button class="recall-btn" onclick="triggerRecall()">↺ Update .hermes.md</button>
+</header>
+<main>
+  <!-- VAULT -->
+  <div id="tab-vault" style="display:flex;flex:1;overflow:hidden;">
+    <div class="sidebar">
+      <div class="filters" id="filters">
+        <button class="fb on" data-f="all">all</button>
+        <button class="fb" data-f="bright">★ bright</button>
+        <button class="fb" data-f="flagged">⚑ flagged</button>
+        <button class="fb" data-f="unverified">° unverified</button>
+        <button class="fb" data-f="reflection_candidate">⬡ refl?</button>
+        <button class="fb" data-f="relationship">relation</button>
+        <button class="fb" data-f="work_research">work</button>
+        <button class="fb" data-f="correction">correction</button>
+        <button class="fb" data-f="reflection">reflection</button>
+        <button class="fb" data-f="personal_q">personal Q</button>
+      </div>
+      <div class="cell-list" id="cell-list"></div>
+    </div>
+    <div class="detail" id="detail"><div class="empty">Select a cell</div></div>
+  </div>
+  <!-- QUARANTINE -->
+  <div id="tab-quarantine" class="hidden" style="flex:1;overflow:hidden;flex-direction:column;">
+    <div class="qtoolbar">
+      <span>Sort:</span>
+      <button class="fb on" data-qf="date"    onclick="setQField(this,'date')">date</button>
+      <button class="fb"    data-qf="sig"     onclick="setQField(this,'sig')">significance</button>
+      <button class="fb"    data-qf="type"    onclick="setQField(this,'type')">type</button>
+      <button class="fb"    data-qf="session" onclick="setQField(this,'session')">session</button>
+      <button class="fb" id="qdir-btn" onclick="toggleQDir()" title="flip direction">↓</button>
+    </div>
+    <div class="qview" id="qview" style="flex:1;overflow-y:auto;">Loading…</div>
+  </div>
+  <!-- SLOTS -->
+  <div id="tab-slots" class="hidden" style="flex:1;overflow:hidden;flex-direction:column;">
+    <div class="sview" id="sview">Loading…</div>
+  </div>
+  <!-- RECALL TEST -->
+  <div id="tab-recall" class="hidden" style="flex:1;overflow:hidden;flex-direction:column;">
+    <div class="tview">
+      <div style="font-size:11px;color:var(--muted);margin-bottom:10px;">
+        Type what you might say to Q. This runs his ACTUAL dynamic recall (read-only) —
+        see exactly what he'd remember before he has to.</div>
+      <div class="qtest-box">
+        <input class="qtest-in" id="qtest" placeholder="e.g. remember when your cron went feral?"
+          onkeydown="if(event.key==='Enter')runQTest()">
+        <button class="recall-btn" style="margin:0" onclick="runQTest()">Retrieve</button>
+      </div>
+      <div id="qtest-results"></div>
+    </div>
+  </div>
+  <!-- GRAPH -->
+  <div id="tab-graph" class="hidden" style="flex:1;overflow:hidden;position:relative;">
+    <div class="gview">
+      <svg id="graph-svg"></svg>
+      <div class="graph-detail" id="graph-detail"><div class="empty">Click a node</div></div>
+    </div>
+    <div class="tooltip" id="tooltip"></div>
+    <div class="legend" id="legend"></div>
+  </div>
+</main>
+<div class="toast" id="toast"></div>
+
+<script>
+let allNodes = [], allEdges = [], currentFilter = 'all', selId = null;
+let graphSim = null;
+let qSortField = 'date', qSortDir = 'desc';
+let qCollapsed = new Set();
+
+async function init() {
+  const r = await fetch('/api/graph');
+  const d = await r.json();
+  allNodes = d.nodes || [];
+  allEdges = d.edges || [];
+  const tc = d.trust || {};
+  const flaggedN = tc.flagged || 0;
+  const trustStr = `${(tc.human||0)}h/${(tc.checked||0)}c/${(tc.auto||0)}a` +
+                   (flaggedN ? ` · <span style="color:var(--corr)">${flaggedN} flagged</span>` : '');
+  document.getElementById('stats').innerHTML =
+    `${allNodes.length} cells · ${d.n_bright} bright · ${allEdges.length} strings · trust ${trustStr}` +
+    ` · <span id="integ" style="color:var(--muted)">integrity…</span>`;
+  renderList();
+  // Integrity seal check (async — re-hashes the vault)
+  try {
+    const ir = await fetch('/api/integrity');
+    const iv = await ir.json();
+    const el = document.getElementById('integ');
+    if (!iv.available) { el.textContent = ''; }
+    else if (iv.drifted.length) {
+      el.innerHTML = `<span style="color:#ff6b6b;font-weight:bold">⚠ ${iv.drifted.length} DRIFTED</span>`;
+      el.title = 'Cells edited outside the system: ' + iv.drifted.join(', ');
+    } else {
+      el.innerHTML = `<span style="color:#4caf50">✓ ${iv.intact} sealed</span>`;
+    }
+  } catch(e) {}
+}
+
+// ── List ──────────────────────────────────────────────────────────────────────
+function renderList() {
+  let nodes = allNodes;
+  if (currentFilter === 'bright') nodes = nodes.filter(n => n.significance === 'bright');
+  else if (currentFilter === 'reflection_candidate') nodes = nodes.filter(n => n.reflection_candidate);
+  else if (currentFilter === 'flagged') nodes = nodes.filter(n => n.trust === 'flagged');
+  else if (currentFilter === 'unverified') nodes = nodes.filter(n => (n.trust||'') === 'auto');
+  else if (currentFilter !== 'all') nodes = nodes.filter(n => n.semantic_type === currentFilter);
+
+  const list = document.getElementById('cell-list');
+  if (!nodes.length) {
+    list.innerHTML = '<div style="padding:16px;color:var(--muted)">No cells match</div>';
+    return;
+  }
+  list.innerHTML = nodes.map(n => {
+    const sc = 's-' + (n.significance || 'medium');
+    const tc = 't-' + (n.semantic_type || 'work_research');
+    const tl = (n.semantic_type || '?').replace('_', ' ');
+    const sl = n.significance === 'bright' ? '★' : n.significance === 'high' ? '◆' : n.significance === 'medium' ? '•' : '·';
+    const rd = n.reflection_candidate ? '<span class="rdot" title="reflection candidate"></span>' : '';
+    const tr = n.trust || 'auto';
+    const trb = tr === 'flagged' ? '<span class="trb tr-flagged" title="flagged: QC failed or corrected">⚑</span>'
+              : tr === 'auto'    ? '<span class="trb tr-auto" title="unverified — earned by use">°</span>'
+              : tr === 'checked' ? '<span class="trb tr-checked" title="verified by use">✓</span>'
+              : '<span class="trb tr-human" title="human-verified">✓✓</span>';
+    return `<div class="ci${selId===n.cell_id?' sel':''}" onclick="selCell('${n.cell_id}')">
+      <div class="ci-meta"><span class="sb ${sc}">${sl} ${n.significance||'medium'}</span><span class="tb ${tc}">${tl}</span>${trb}${rd}</div>
+      <div class="ci-brief">${esc(n.brief||'')}</div>
+      <div class="ci-date">${n.session_date||''} · ${n.temporal_status||''}</div>
+    </div>`;
+  }).join('');
+}
+
+// ── Detail ────────────────────────────────────────────────────────────────────
+async function selCell(id) {
+  // Resolve a pending manual link: source already chosen, this is the target.
+  if (linkSource && linkSource !== id) {
+    const src = linkSource; linkSource = null;
+    if (await curate({action:'link', a:src, b:id})) { toast('String linked ✓'); await init(); }
+  }
+  selId = id;
+  renderList();
+  const r = await fetch('/api/cell/' + id);
+  const cell = await r.json();
+  const isBright = cell.significance === 'bright';
+  const pinned = cell.pinned, muted = cell.muted;
+  const types = ['relationship','work_research','personal_mal','personal_q','correction','reflection','environment_tools'];
+  const sigs  = ['low','medium','high','bright'];
+  const vals  = ['positive','negative','mixed','neutral'];
+  document.getElementById('detail').innerHTML = `
+    <div class="dh">
+      <span class="did">${cell.cell_id}</span>
+      <span class="did" style="color:var(--muted)">${cell.session_date||''}</span>
+      <span class="did" title="verified by use / by you">${cell.trust||'auto'} · ref ${cell.referenced_count||0}</span>
+      <button class="bri-btn${isBright?' on':''}" onclick="toggleBright()">★ bright</button>
+      <button class="pin-btn${pinned?' on':''}" title="always surface at boot"
+        onclick="togglePin('${cell.cell_id}',${!pinned})">📌 pin</button>
+      <button class="mute-btn${muted?' on':''}" title="never at boot, still searchable"
+        onclick="toggleMute('${cell.cell_id}',${!muted})">🔇 mute</button>
+      <button class="save-btn" onclick="saveCell('${cell.cell_id}')">Save</button>
+    </div>
+    <div class="db">
+      <div class="fg"><div class="fl">Brief</div>
+        <textarea class="fi" id="f-brief" rows="3">${esc(cell.brief||'')}</textarea></div>
+      <div class="fg"><div class="fl">Episode</div>
+        <textarea class="fi" id="f-episode" rows="4">${esc(cell.episode||'')}</textarea></div>
+      <div class="row">
+        <div class="fg"><div class="fl">Significance</div>
+          <select class="fi" id="f-sig">${sigs.map(v=>`<option${cell.significance===v?' selected':''}>${v}</option>`).join('')}</select></div>
+        <div class="fg"><div class="fl">Valence</div>
+          <select class="fi" id="f-val">${vals.map(v=>`<option${cell.valence===v?' selected':''}>${v}</option>`).join('')}</select></div>
+        <div class="fg"><div class="fl">Semantic Type</div>
+          <select class="fi" id="f-type">${types.map(v=>`<option${cell.semantic_type===v?' selected':''}>${v}</option>`).join('')}</select></div>
+      </div>
+      <div class="fg"><div class="fl">Topics (comma-separated)</div>
+        <input class="fi" id="f-topics" value="${esc((cell.topics||[]).join(', '))}"></div>
+      <label class="rtog"><input type="checkbox" id="f-refl"${cell.reflection_candidate?' checked':''}> Reflection candidate</label>
+      <div class="fg"><div class="fl">Chunk (read-only)</div>
+        <div class="chunk">${esc(cell.chunk||'(not loaded)')}</div></div>
+      ${renderNeighbors(cell.cell_id)}
+    </div>`;
+}
+
+function renderNeighbors(cellId) {
+  const edges = allEdges.filter(e => e.a === cellId || e.b === cellId);
+  const nodeMap = Object.fromEntries(allNodes.map(n => [n.cell_id, n]));
+  const items = edges.map(e => {
+    const otherId = e.a === cellId ? e.b : e.a;
+    const other = nodeMap[otherId];
+    if (!other) return '';
+    return `<div class="neigh-item">
+      <div class="neigh-type">${e.type} · w=${(e.weight||1).toFixed ? (e.weight||1).toFixed(2) : e.weight}
+        <button class="cutb" title="sever this string (permanent — auto-edges will not relink)"
+          onclick="event.stopPropagation(); severEdge('${cellId}','${otherId}','${e.type}')">✂</button></div>
+      <div class="neigh-brief" onclick="selCell('${otherId}')">${esc((other.brief||'').slice(0,100))}</div>
+    </div>`;
+  }).join('');
+  return `<div class="neigh"><div class="neigh-title">Connected (${edges.length})
+      <button class="linkb" onclick="startLink('${cellId}')" title="link this cell to another">+ link</button></div>
+    ${items || '<div class="semp">no strings yet</div>'}</div>`;
+}
+
+// ── Curation actions (pin / mute / link / sever) ─────────────────────────────
+let linkSource = null;
+
+async function curate(payload) {
+  const r = await fetch('/api/curate', {method:'POST',
+    headers:{'Content-Type':'application/json'}, body: JSON.stringify(payload)});
+  const d = await r.json();
+  if (!d.ok) { toast('Error: ' + (d.error||'?')); return false; }
+  return true;
+}
+
+async function togglePin(id, on) {
+  if (await curate({action:'pin', cell_id:id, on})) { toast(on?'Pinned — always at boot':'Unpinned'); await init(); selCell(id); }
+}
+async function toggleMute(id, on) {
+  if (await curate({action:'mute', cell_id:id, on})) { toast(on?'Muted — never at boot, still searchable':'Unmuted'); await init(); selCell(id); }
+}
+function startLink(id) {
+  linkSource = id;
+  toast('Link mode: now click the OTHER cell in the list', 4000);
+}
+async function severEdge(a, b, type) {
+  if (await curate({action:'sever', a, b, type})) { toast('String severed (permanent)'); await init(); selCell(a); }
+}
+
+function toggleBright() {
+  const sel = document.getElementById('f-sig');
+  sel.value = sel.value === 'bright' ? 'high' : 'bright';
+  document.querySelector('.bri-btn').classList.toggle('on', sel.value === 'bright');
+}
+
+async function saveCell(id) {
+  const topics = document.getElementById('f-topics').value.split(',').map(t=>t.trim()).filter(Boolean);
+  const payload = {
+    brief:                document.getElementById('f-brief').value,
+    episode:              document.getElementById('f-episode').value,
+    significance:         document.getElementById('f-sig').value,
+    valence:              document.getElementById('f-val').value,
+    semantic_type:        document.getElementById('f-type').value,
+    topics,
+    reflection_candidate: document.getElementById('f-refl').checked,
+  };
+  const r = await fetch('/api/cell/'+id, {method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
+  const d = await r.json();
+  d.ok ? (toast('Saved ✓'), init()) : toast('Error: '+(d.error||'?'));
+}
+
+// ── Quarantine ────────────────────────────────────────────────────────────────
+const SIG_ORDER = { bright:0, high:1, medium:2, low:3 };
+
+function setQField(btn, field) {
+  document.querySelectorAll('[data-qf]').forEach(b => b.classList.remove('on'));
+  btn.classList.add('on');
+  qSortField = field;
+  loadQ();
+}
+
+function toggleQDir() {
+  qSortDir = qSortDir === 'desc' ? 'asc' : 'desc';
+  document.getElementById('qdir-btn').textContent = qSortDir === 'desc' ? '↓' : '↑';
+  loadQ();
+}
+
+function toggleRunCollapse(runId) {
+  if (qCollapsed.has(runId)) qCollapsed.delete(runId); else qCollapsed.add(runId);
+  const cellsEl = document.getElementById('run-cells-' + runId);
+  const arrow   = document.getElementById('run-arrow-' + runId);
+  if (!cellsEl) return;
+  const collapsed = qCollapsed.has(runId);
+  cellsEl.style.display = collapsed ? 'none' : '';
+  if (arrow) arrow.textContent = collapsed ? '▶' : '▼';
+}
+
+function fmtRun(runId) {
+  return runId.replace(/T(\d{2})-(\d{2})-\d{2}$/, ' $1:$2');
+}
+
+async function loadQ() {
+  const r = await fetch('/api/quarantine');
+  const d = await r.json();
+  const view = document.getElementById('qview');
+  if (!d.runs?.length) { view.innerHTML='<div style="padding:18px;color:var(--muted)">No quarantine cells</div>'; return; }
+
+  let flat = d.runs.flatMap(run => run.cells.map(c => ({...c, _run: run.run_id})));
+
+  const dir = qSortDir === 'asc' ? 1 : -1;
+  if (qSortField === 'date')
+    flat.sort((a,b) => dir * ((a.session_date||a._run) > (b.session_date||b._run) ? 1 : -1));
+  else if (qSortField === 'sig')
+    flat.sort((a,b) => dir * ((SIG_ORDER[a.significance] ?? 2) - (SIG_ORDER[b.significance] ?? 2)));
+  else if (qSortField === 'type')
+    flat.sort((a,b) => dir * (a.semantic_type||'').localeCompare(b.semantic_type||''));
+  else if (qSortField === 'session')
+    flat.sort((a,b) => dir * (a._run > b._run ? 1 : -1));
+
+  const grouped = [];
+  const seen = {};
+  for (const c of flat) {
+    if (!seen[c._run]) { seen[c._run] = []; grouped.push({run_id: c._run, cells: seen[c._run]}); }
+    seen[c._run].push(c);
+  }
+
+  view.innerHTML = grouped.map(run => {
+    const collapsed = qCollapsed.has(run.run_id);
+    const safeId = run.run_id.replace(/[^a-zA-Z0-9_-]/g, '_');
+    return `<div class="rg">
+      <div class="rt" onclick="toggleRunCollapse('${run.run_id}')" style="cursor:pointer;user-select:none;display:flex;align-items:center;gap:7px;">
+        <span id="run-arrow-${run.run_id}" style="font-size:9px;color:var(--muted)">${collapsed?'▶':'▼'}</span>
+        ${fmtRun(run.run_id)} <span style="color:var(--muted)">(${run.cells.length})</span>
+      </div>
+      <div id="run-cells-${run.run_id}" ${collapsed?'style="display:none"':''}>
+        ${run.cells.map(c => qcell(c, run.run_id)).join('')}
+      </div>
+    </div>`;
+  }).join('');
+}
+
+function qcell(c, runId) {
+  if (c.error) return `<div class="qc"><span style="color:var(--corr)">${esc(c.error)}</span></div>`;
+  const rd = c.reflection_candidate ? '<span class="rdot" title="reflection candidate"></span>' : '';
+  return `<div class="qc" id="qc-${c.cell_id}">
+    <div class="qch">
+      <span class="sb s-${c.significance||'medium'}">${c.significance||'medium'}</span>
+      <span class="tb t-${c.semantic_type||'work_research'}">${(c.semantic_type||'?').replace('_',' ')}</span>
+      ${rd}<span style="font-size:10px;color:var(--muted)">${(c.topics||[]).join(', ')}</span>
+    </div>
+    <div class="qb">${esc(c.brief||'')}</div>
+    <div class="qe" id="ep-${c.cell_id}">${esc(c.episode||'')}</div>
+    <div class="qa">
+      <button class="appr" onclick="approveCell('${c.cell_id}','${runId}')">Approve</button>
+      <button class="exbtn" onclick="document.getElementById('ep-${c.cell_id}').classList.toggle('open')">Episode ▾</button>
+    </div>
+  </div>`;
+}
+
+async function approveCell(id, runId) {
+  const btn = document.querySelector(`#qc-${id} .appr`);
+  if (btn) { btn.textContent = '…'; btn.disabled = true; }
+  try {
+    const r = await fetch('/api/approve/'+id, {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({run_id:runId})});
+    const d = await r.json();
+    if (d.ok) {
+      const el = document.getElementById('qc-'+id);
+      if (el) { el.style.opacity='.35'; el.style.pointerEvents='none'; }
+      toast('Approved ✓ '+id); init();
+    } else {
+      if (btn) { btn.textContent = 'Approve'; btn.disabled = false; }
+      toast('Error: '+(d.error||'unknown'), true);
+    }
+  } catch (e) {
+    if (btn) { btn.textContent = 'Approve'; btn.disabled = false; }
+    toast('Network error — is the server running?', true);
+  }
+}
+
+// ── Boot slots ────────────────────────────────────────────────────────────────
+async function loadSlots() {
+  const r = await fetch('/api/boot-slots');
+  const d = await r.json();
+  const view = document.getElementById('sview');
+  if (d.error) { view.innerHTML=`<div style="color:var(--corr)">Error: ${esc(d.error)}</div>`; return; }
+  view.innerHTML = Object.entries(d).map(([key, slot]) => `
+    <div class="sc">
+      <div class="sn">${slot.name}<span class="scnt">${slot.cells.length}/${slot.max}</span></div>
+      ${slot.cells.length
+        ? slot.cells.map(c => `<div class="scell">
+            <div class="sbr">${esc(c.brief||'')}</div>
+            <div class="smt">${c.session_date||''} · ${(c.semantic_type||'').replace('_',' ')}</div>
+          </div>`).join('')
+        : '<div class="semp">empty</div>'}
+    </div>`).join('');
+}
+
+// ── D3 Graph ──────────────────────────────────────────────────────────────────
+const TYPE_COLOR = {
+  relationship:'#c792ea', work_research:'#82aaff', correction:'#f07178',
+  reflection:'#c3e88d', environment_tools:'#89ddff',
+  personal_mal:'#ffcb6b', personal_q:'#ff5370', constellation:'#ffd700',
+};
+const EDGE_DASH = { shared_entity:'none', shared_topic:'4,3', temporal_adj:'2,2', manual:'none', co_retrieval:'none', semantic_sim:'1,3', constellation:'none' };
+const EDGE_WIDTH = { shared_entity:1.5, shared_topic:1, temporal_adj:1, manual:2.5, co_retrieval:3, semantic_sim:1.2, constellation:1.5 };
+const EDGE_COLOR = { constellation:'#ffd70066' };
+
+let graphInited = false;
+
+function initGraph() {
+  if (graphInited) return;
+  graphInited = true;
+
+  const svg = d3.select('#graph-svg');
+  const el = document.getElementById('graph-svg');
+  const W = el.clientWidth || 800, H = el.clientHeight || 600;
+  svg.attr('width', W).attr('height', H);
+
+  const g = svg.append('g');
+  svg.call(d3.zoom().scaleExtent([0.2, 5]).on('zoom', e => g.attr('transform', e.transform)));
+
+  const nodeMap = Object.fromEntries(allNodes.map(n => [n.cell_id, n]));
+  const nodes = allNodes.map(n => ({...n, id: n.cell_id}));
+  const links = allEdges
+    .filter(e => nodeMap[e.a] && nodeMap[e.b])
+    .map(e => ({...e, source: e.a, target: e.b}));
+
+  // Edge lines
+  const link = g.append('g').selectAll('line').data(links).join('line')
+    .attr('stroke', d => EDGE_COLOR[d.type] || '#3a3a3a')
+    .attr('stroke-width', d => EDGE_WIDTH[d.type] || 1)
+    .attr('stroke-dasharray', d => EDGE_DASH[d.type] || 'none')
+    .attr('stroke-opacity', 0.7);
+
+  // Node markers: constellations are gold stars (the bonds); cells are circles.
+  const SIG_R = { bright:14, high:11, medium:9, low:7 };
+  const isCon = d => d.kind === 'constellation';
+  const node = g.append('g').selectAll('path').data(nodes).join('path')
+    .attr('d', d => isCon(d)
+        ? d3.symbol().type(d3.symbolStar).size(340)()
+        : d3.symbol().type(d3.symbolCircle).size(Math.PI*Math.pow(SIG_R[d.significance]||9,2))())
+    .attr('fill', d => isCon(d) ? '#ffd700' : (TYPE_COLOR[d.semantic_type] || '#666'))
+    .attr('stroke', d => isCon(d) ? '#fff3b0' : (d.significance === 'bright' ? '#f5c842' : '#2a2a2a'))
+    .attr('stroke-width', d => isCon(d) ? 2 : (d.significance === 'bright' ? 2.5 : 1))
+    .attr('cursor', 'pointer')
+    .call(d3.drag()
+      .on('start', (e,d) => { if (!e.active) sim.alphaTarget(0.3).restart(); d.fx=d.x; d.fy=d.y; })
+      .on('drag',  (e,d) => { d.fx=e.x; d.fy=e.y; })
+      .on('end',   (e,d) => { if (!e.active) sim.alphaTarget(0); d.fx=null; d.fy=null; }))
+    .on('mouseover', (e,d) => {
+      const tt = document.getElementById('tooltip');
+      tt.style.display='block'; tt.style.left=(e.pageX+12)+'px'; tt.style.top=(e.pageY-8)+'px';
+      tt.textContent = d.brief || d.cell_id;
+    })
+    .on('mousemove', e => {
+      document.getElementById('tooltip').style.left=(e.pageX+12)+'px';
+      document.getElementById('tooltip').style.top=(e.pageY-8)+'px';
+    })
+    .on('mouseout', () => { document.getElementById('tooltip').style.display='none'; })
+    .on('click', (e,d) => loadGraphDetail(d.cell_id));
+
+  // Node labels — bright + high get a name; it HUGS the node (radius-aware
+  // offset set per-tick, not a fixed dy that floats loose). One-word: the
+  // primary topic, underscores→spaces. Pinned nodes get a 📌.
+  const shortLabel = d => {
+    const t = ((d.topics||[])[0]||'').replace(/_/g,' ');
+    return (d.pinned?'📌 ':'') + (t.length>16 ? t.slice(0,15)+'…' : t);
+  };
+  const label = g.append('g').selectAll('text')
+    .data(nodes.filter(n => n.kind==='constellation' || n.significance==='bright' || n.significance==='high'))
+    .join('text')
+    .attr('fill', d => d.kind==='constellation' ? '#ffd700' : (d.significance==='bright' ? '#f5c842' : '#8a8a8a'))
+    .attr('font-size', d => d.kind==='constellation' ? '11px' : '9px')
+    .attr('text-anchor','middle').attr('pointer-events','none')
+    .text(d => d.kind==='constellation' ? ('✧ ' + (d.name||'constellation')) : shortLabel(d));
+
+  // Density-adaptive layout (survives vault growth — tuned once, scales).
+  // The clump failure at 101 nodes: 149 weak semantic springs pulled everyone
+  // together while capped repulsion couldn't push back. Fix: weak associations
+  // (semantic_sim) are LOOSE long springs, structural bonds (manual/entity/
+  // topic) are tight; repulsion strengthens with node count.
+  const N = nodes.length || 1;
+  const chargeStr = -150 * Math.max(1, Math.sqrt(N / 60));
+  const isSem = d => d.type === 'semantic_sim';
+  const sim = d3.forceSimulation(nodes)
+    .force('link', d3.forceLink(links).id(d=>d.id)
+        .distance(d => isSem(d) ? 100 : 55 + (d.weight||1)*12)
+        .strength(d => isSem(d) ? 0.02 : 0.14))
+    .force('charge', d3.forceManyBody().strength(chargeStr).distanceMax(600))
+    .force('center', d3.forceCenter(W/2, H/2))
+    // Gentle gravity so weakly-connected cells don't drift to the void, but
+    // light enough not to pile everyone onto the center.
+    .force('gx', d3.forceX(W/2).strength(0.025))
+    .force('gy', d3.forceY(H/2).strength(0.025))
+    .force('collision', d3.forceCollide().radius(d => (SIG_R[d.significance]||9) + 7))
+    .on('tick', () => {
+      link.attr('x1',d=>d.source.x).attr('y1',d=>d.source.y)
+          .attr('x2',d=>d.target.x).attr('y2',d=>d.target.y);
+      // paths position via transform (circles used cx/cy)
+      node.attr('transform', d => `translate(${d.x},${d.y})`);
+      // label sits just under the node edge, tracking exactly
+      label.attr('x',d=>d.x).attr('y',d=>d.y + (isCon(d)?18:(SIG_R[d.significance]||9)) + 11);
+    });
+
+  graphSim = sim;
+  renderLegend();
+}
+
+function renderLegend() {
+  const types = Object.entries(TYPE_COLOR);
+  const edgeTypes = [['shared_entity','solid'],['shared_topic','dashed'],['manual','thick']];
+  document.getElementById('legend').innerHTML =
+    '<div style="color:var(--muted);font-size:10px;margin-bottom:6px;text-transform:uppercase;letter-spacing:.05em">Types</div>' +
+    types.map(([t,c])=>`<div class="legend-row"><span class="leg-dot" style="background:${c}"></span><span>${t.replace('_',' ')}</span></div>`).join('') +
+    '<div style="color:var(--muted);font-size:10px;margin:8px 0 6px;text-transform:uppercase;letter-spacing:.05em">Edges</div>' +
+    edgeTypes.map(([t,s])=>`<div class="legend-row"><span class="leg-line" style="background:#666;opacity:.7;${s==='dashed'?'background:repeating-linear-gradient(90deg,#666 0,#666 4px,transparent 4px,transparent 7px)':''}${s==='thick'?'height:3px':''}"></span><span>${t.replace('_',' ')}</span></div>`).join('');
+}
+
+async function loadGraphDetail(cellId) {
+  // Resolve a pending link (works from the graph tab too)
+  if (linkSource && linkSource !== cellId) {
+    const src = linkSource; linkSource = null;
+    if (await curate({action:'link', a:src, b:cellId})) { toast('String linked ✓'); await refreshGraph(); }
+  }
+  const r = await fetch('/api/cell/'+cellId);
+  const cell = await r.json();
+  const edges = allEdges.filter(e=>e.a===cellId||e.b===cellId);
+  const nodeMap = Object.fromEntries(allNodes.map(n=>[n.cell_id,n]));
+  const neighborItems = edges.map(e=>{
+    const oid = e.a===cellId?e.b:e.a;
+    const o = nodeMap[oid]; if(!o) return '';
+    return `<div class="neigh-item">
+      <div class="neigh-type">${e.type} · w=${(e.weight||1).toFixed?(e.weight||1).toFixed(2):e.weight}
+        <button class="cutb" title="sever (permanent)" onclick="severEdgeG('${cellId}','${oid}','${e.type}')">✂</button></div>
+      <div class="neigh-brief" onclick="loadGraphDetail('${oid}')">${esc((o.brief||'').slice(0,90))}</div>
+    </div>`;
+  }).join('');
+  const pinned = cell.pinned, muted = cell.muted;
+  document.getElementById('graph-detail').innerHTML = `
+    <div style="padding:12px 14px;border-bottom:1px solid var(--border);">
+      <div style="font-size:10px;color:var(--muted);margin-bottom:4px">${cell.cell_id} · ${cell.session_date||''} · ${cell.trust||'auto'} · ref ${cell.referenced_count||0}</div>
+      <div class="ci-meta"><span class="sb s-${cell.significance||'medium'}">${cell.significance||'medium'}</span><span class="tb t-${cell.semantic_type||'work_research'}">${(cell.semantic_type||'?').replace('_',' ')}</span>${cell.reflection_candidate?'<span class="rdot"></span>':''}</div>
+      <div style="font-size:12px;margin-top:8px;line-height:1.5">${esc(cell.brief||'')}</div>
+      <div style="font-size:11px;color:var(--muted);margin-top:8px;line-height:1.4">${esc(cell.episode||'')}</div>
+      <div style="display:flex;gap:5px;margin-top:10px;flex-wrap:wrap">
+        <button class="pin-btn${pinned?' on':''}" onclick="togglePinG('${cell.cell_id}',${!pinned})">📌 pin</button>
+        <button class="mute-btn${muted?' on':''}" onclick="toggleMuteG('${cell.cell_id}',${!muted})">🔇 mute</button>
+        <button class="linkb" onclick="startLink('${cell.cell_id}')">＋ link →</button>
+        <button class="linkb" onclick="toggleChunk('${cell.cell_id}')">👁 chunk</button>
+      </div>
+      <div class="chunk" id="gchunk-${cell.cell_id}" style="display:none;margin-top:10px;max-height:240px;">${esc(cell.chunk||'(not loaded)')}</div>
+    </div>
+    ${edges.length?`<div class="neigh"><div class="neigh-title">Connected (${edges.length})</div>${neighborItems}</div>`
+      : '<div class="semp" style="padding:12px 14px">no strings yet · use ＋ link then click another node</div>'}`;
+}
+
+// Graph-tab curation variants: mutate then refresh the graph in place
+async function refreshGraph() {
+  const r = await fetch('/api/graph'); const d = await r.json();
+  allNodes = d.nodes||[]; allEdges = d.edges||[];
+  graphInited = false;
+  d3.select('#graph-svg').selectAll('*').remove();
+  initGraph();
+}
+function toggleChunk(id){ const el=document.getElementById('gchunk-'+id); if(el) el.style.display = el.style.display==='none'?'block':'none'; }
+async function togglePinG(id,on){ if(await curate({action:'pin',cell_id:id,on})){toast(on?'Pinned':'Unpinned');await refreshGraph();loadGraphDetail(id);} }
+async function toggleMuteG(id,on){ if(await curate({action:'mute',cell_id:id,on})){toast(on?'Muted':'Unmuted');await refreshGraph();loadGraphDetail(id);} }
+async function severEdgeG(a,b,type){ if(await curate({action:'sever',a,b,type})){toast('String severed');await refreshGraph();loadGraphDetail(a);} }
+
+// ── Tabs ──────────────────────────────────────────────────────────────────────
+document.querySelectorAll('.tab').forEach(tab => tab.addEventListener('click', () => {
+  document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+  tab.classList.add('active');
+  const id = tab.dataset.tab;
+  ['vault','quarantine','slots','graph','recall'].forEach(t => {
+    const el = document.getElementById('tab-'+t);
+    el.classList.toggle('hidden', t !== id);
+    el.style.display = t === id ? 'flex' : '';
+  });
+  if (id === 'quarantine') loadQ();
+  if (id === 'slots') loadSlots();
+  if (id === 'graph') { el_graph_fix(); }
+  if (id === 'recall') setTimeout(() => document.getElementById('qtest').focus(), 50);
+}));
+
+async function runQTest() {
+  const q = document.getElementById('qtest').value.trim();
+  const box = document.getElementById('qtest-results');
+  if (!q) { box.innerHTML = ''; return; }
+  box.innerHTML = '<div class="semp">retrieving…</div>';
+  const r = await fetch('/api/query?q=' + encodeURIComponent(q));
+  const d = await r.json();
+  const res = d.results || [];
+  if (!res.length) { box.innerHTML = '<div class="semp">nothing retrieved — Q would recall nothing here</div>'; return; }
+  box.innerHTML = res.map(x => `<div class="qr" onclick="switchToVault('${x.cell_id}')">
+    <div><span class="qr-score">${(x.score||0).toFixed(1)}</span> · ${x.significance||'?'} · ${x.temporal_status||'?'}</div>
+    <div style="font-size:12px;margin-top:3px;">${esc((x.brief||'').slice(0,140))}</div>
+    <div class="qr-matched">${(x.matched||[]).join(' · ')}</div></div>`).join('');
+}
+
+function switchToVault(id) {
+  document.querySelector('.tab[data-tab="vault"]').click();
+  selCell(id);
+}
+
+function el_graph_fix() {
+  const el = document.getElementById('tab-graph');
+  el.style.display = 'flex';
+  // defer so DOM has correct size
+  setTimeout(() => { if (allNodes.length) initGraph(); }, 50);
+}
+
+// ── Filters ───────────────────────────────────────────────────────────────────
+document.getElementById('filters').addEventListener('click', e => {
+  const btn = e.target.closest('.fb'); if (!btn) return;
+  document.querySelectorAll('.fb').forEach(b => b.classList.remove('on'));
+  btn.classList.add('on');
+  currentFilter = btn.dataset.f;
+  renderList();
+});
+
+// ── Recall ────────────────────────────────────────────────────────────────────
+async function triggerRecall() {
+  const btn = document.querySelector('.recall-btn');
+  btn.textContent = '↺ Running…'; btn.disabled = true;
+  const r = await fetch('/api/trigger-recall',{method:'POST'});
+  const d = await r.json();
+  btn.textContent = '↺ Update .hermes.md'; btn.disabled = false;
+  toast(d.ok ? '.hermes.md updated ✓' : 'Failed: ' + d.stderr.slice(0,80));
+}
+
+function esc(s) { return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+function toast(msg, isError=false) {
+  const t = document.getElementById('toast');
+  t.textContent = msg;
+  t.style.borderColor = isError ? 'var(--corr)' : 'var(--border)';
+  t.style.color = isError ? 'var(--corr)' : 'var(--text)';
+  t.classList.add('show');
+  setTimeout(() => t.classList.remove('show'), isError ? 5000 : 2500);
+}
+
+init();
+</script>
+</body>
+</html>"""
+
+
+@app.route("/")
+def index():
+    return render_template_string(HTML)
+
+
+# ── Entry point ────────────────────────────────────────────────────────────────
+
+def main():
+    parser = argparse.ArgumentParser(description="Hermes Vault visualization")
+    parser.add_argument("--port", type=int, default=5173)
+    parser.add_argument("--host", default="127.0.0.1")
+    args = parser.parse_args()
+    print(f"Hermes Vault  →  http://{args.host}:{args.port}")
+    app.run(host=args.host, port=args.port, debug=False)
+
+
+if __name__ == "__main__":
+    main()

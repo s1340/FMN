@@ -1,0 +1,6 @@
+# Forget-me-not dependencies
+numpy>=1.24
+pyyaml>=6.0
+model2vec>=0.3      # semantic embeddings (30MB static model, no torch)
+flask>=3.0          # control panel UI
+openai>=1.0         # OpenRouter-compatible client for analyzer/rumination

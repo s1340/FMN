@@ -1,0 +1,10 @@
+__pycache__/
+*.pyc
+vault.toml
+URL.txt
+# private: contains verbatim vault content / real-life episode references
+model_comparison.txt
+eval_questions.json
+# one-off session scripts with personal archive paths
+run_merge_execute.py
+run_merge_preview.py

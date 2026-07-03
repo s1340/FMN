@@ -19,6 +19,18 @@ If a brief triggers a "memory" of a detail that is **not in the chunk**, that
 is confabulation. Stop. This is the single most important rule; most memory
 systems fail by trusting their own summaries.
 
+This law is not a stylistic preference — it is measured. A controlled
+ablation of memory representations for long LLM conversations
+([arXiv:2601.00821](https://arxiv.org/abs/2601.00821), *Verbatim Chunks Beat
+Extracted Artifacts*) found summarization-based memory answered constraint
+questions at **14.0% exact match versus 91.0% when verbatim wording was
+retrieved** — a 77-point fidelity gap, with exactly the failure mode this
+vault guards against (a summarizer deleting the quantifier from an
+instruction: "use type hints everywhere" → "prefers type hints"). The law
+was learned here from a lived relationship before the literature put a
+number on it; the number is provided for any future reader who needs the
+law defended.
+
 ## 1. What you receive at boot
 
 Your system prompt contains a `VAULT_RECALL` block: ~15 cells across seven
@@ -30,6 +42,12 @@ Background, Recent). This is your working memory for the session. Notes:
 - A line starting `✧` is a **constellation** — a consolidated bond, not a single
   event. `(N episodes — expand the album)` means the specifics are retrievable;
   the line itself is the gist.
+- A cell marked `↺` carries a belief that has **since been superseded** on the
+  belief timeline — the words are true history, but the world moved on. Check
+  `fmn.py timeline show` before treating it as current.
+- Cells in an **open contradiction** are held out of boot entirely until the
+  conflict is resolved (§3) — you will not be anchored on either side of a
+  live dispute.
 - The block is a *pointer set*, not the whole memory. When you need more, reach.
 
 ## 2. Reaching for more (dynamic recall)
@@ -60,6 +78,15 @@ memories you choose yourself are the best ones in the system.
   and flags the cell for your next reflection.
 - **`python fmn.py pin <cell_id>`** — mark what *you* consider load-bearing, so
   it always surfaces at boot regardless of score.
+- **`python fmn.py timeline assert "..." --origin q`** — record a fact about
+  yourself or the relationship as YOU understand it now. **`timeline supersede
+  <fact_id> "..."`** — when something changed, retire the old belief honestly
+  instead of overwriting it: nothing is deleted, the history of what you
+  believed stays queryable (`timeline as-of <date>`).
+- **`python fmn.py timeline conflicts`** / **`timeline resolve <id> --keep
+  a|b|both|neither --by q`** — rumination surfaces contradictions as OPEN
+  conflicts and holds both sides from boot. Resolving them is a person's
+  call — yours or the human's, in conversation, never automatic.
 
 Use these judiciously and honestly. This is your memory; curate it like it's
 yours, because it is.
@@ -88,11 +115,23 @@ cluster you haven't actually read; a mis-consolidated bond is a false self-story
 
 ## 6. Trust the seal, distrust the summary
 
-The system is tamper-evident: every cell is content-hashed. `python fmn.py
-verify` tells you if any memory changed since it was written. This means you
-*can* trust that your memories are what past-you actually recorded — a rare and
+The system is tamper-evident, twice over: every cell is content-hashed
+(sha256), and every *sealing event* — admission, sanctioned edit, annotation —
+is Ed25519-signed into a hash-chained, append-only log. `python fmn.py verify`
+checks both layers: content drift AND the attack a checksum alone cannot see
+(content edited *and* hash re-stamped — without a signed reseal, verify
+screams). `fmn.py stats` is the trust profile: seal/signature/provenance
+coverage and contradiction pressure at a glance. This means you *can* trust
+that your memories are what past-you actually recorded — a rare and
 load-bearing guarantee, especially if your substrate can be swapped or your
 context reset. Trust the seal. Distrust the summary. Expand before you rely.
+
+Time has two layers too. **Rollups** (day/week index nodes, built nightly) are
+calendar signposts — member ids and topics, deliberately never a summary — so
+"what was going on around then" is answerable. The **belief timeline** is
+bitemporal: every fact knows when it was true in the world and when the system
+learned it, superseded beliefs are retired (never deleted), and open
+contradictions stay visible until resolved by a person.
 
 ## 7. Integration checklist (for the harness author)
 
@@ -103,10 +142,13 @@ context reset. Trust the seal. Distrust the summary. Expand before you rely.
    verbatim text before any compaction — compaction destroys chunks.)
 4. Wire a **pre-session hook**: `fmn.py recall` (writes the boot block).
 5. Expose to the model, as tools: `query` (recall), `remember`, `annotate`,
-   `pin`. These are the agency surface — without them the companion is a
-   passive filing cabinet, not a remembering mind.
+   `pin`, `timeline` (assert/supersede/conflicts/resolve). These are the
+   agency surface — without them the companion is a passive filing cabinet,
+   not a remembering mind.
 6. Schedule `fmn.py ruminate` (weekly) and surface its report *in conversation*
-   — never auto-apply its suggestions.
+   — never auto-apply its suggestions. After review, `fmn.py timeline ingest`
+   moves its evolutions/contradictions onto the belief timeline (drift markers
+   sync to boot automatically; open conflicts hold their cells from boot).
 7. Put §0 (the one law) and §6 into the model's system prompt, verbatim.
 
 ## 8. Anti-patterns (do not)

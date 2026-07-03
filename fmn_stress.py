@@ -324,6 +324,79 @@ def main():
           f"findable {'PASS' if findable else 'FAIL'}, annotate+reseal "
           f"{'PASS' if annotated and seal_ok else 'FAIL'}")
 
+    # ── 12. BELIEF TIMELINE (bitemporal: supersede, conflict, drift sync) ──
+    import memory_timeline as tl
+    f_old = tl.do_assert("stress: Mal works days", confidence=0.9,
+                         sources=[cid], origin="rumination")
+    f_new = tl.do_supersede(f_old, "stress: Mal works nights",
+                            sources=[cid], origin="rumination")
+    state = tl.replay()
+    supersede_ok = (state["facts"][f_old]["retired"] is not None
+                    and state["facts"][f_old]["retired"]["successor"] == f_new)
+    fa = tl.do_assert("stress: X true", sources=[cid], origin="rumination")
+    fb = tl.do_assert("stress: X false", sources=[members[0]],
+                      origin="rumination")
+    tl.append_records([{"rec": "conflict", "id": "c_stress01", "fact_a": fa,
+                        "fact_b": fb, "fact_a_cell": cid,
+                        "fact_b_cell": members[0], "explanation": "stress"}])
+    tl.sync_graph_markers()
+    graph = mg.load_graph()
+    held = (graph["nodes"][cid].get("in_conflict")
+            and graph["nodes"][members[0]].get("in_conflict"))
+    tl.do_resolve("c_stress01", "a", by="stress")
+    graph = mg.load_graph()
+    released = (not graph["nodes"][cid].get("in_conflict")
+                and graph["nodes"][members[0]].get("timeline_superseded"))
+    chain_ok = tl.verify_chain()
+    report["timeline"] = {"supersede": supersede_ok, "conflict_holds": bool(held),
+                          "resolve_releases": bool(released), "chain": chain_ok}
+    print(f"[12] timeline: supersede {'PASS' if supersede_ok else 'FAIL'}, "
+          f"conflict-hold {'PASS' if held else 'FAIL'}, resolve-release "
+          f"{'PASS' if released else 'FAIL'}, chain "
+          f"{'PASS' if chain_ok else 'FAIL'}")
+
+    # ── 13. ROLLUPS (mechanical middle layer: build, idempotent, excluded) ──
+    import consolidate
+    consolidate.build()
+    graph = mg.load_graph()
+    rollups = [n for n in graph["nodes"].values() if n.get("kind") == "rollup"]
+    n_cells = sum(1 for n in graph["nodes"].values()
+                  if n.get("kind") not in ("rollup", "constellation"))
+    invariant = len(rollups) <= n_cells and all(
+        len(r.get("members", [])) >= 2 for r in rollups)
+    before = len(graph["nodes"])
+    consolidate.build()                              # idempotent rebuild
+    idem = len(mg.load_graph()["nodes"]) == before
+    slots2 = vr.fill_slots(mg.load_graph())
+    no_rollup_boot = not any(c.get("kind") == "rollup"
+                             for cs in slots2.values() for c in cs)
+    report["rollups"] = {"count": len(rollups), "invariant": invariant,
+                         "idempotent": idem, "boot_excluded": no_rollup_boot}
+    print(f"[13] rollups: {len(rollups)} built, invariant "
+          f"{'PASS' if invariant else 'FAIL'}, idempotent "
+          f"{'PASS' if idem else 'FAIL'}, boot-excluded "
+          f"{'PASS' if no_rollup_boot else 'FAIL'}")
+
+    # ── 14. SIGNATURES (re-stamp without signing must be caught) ───────────
+    import memory_sign
+    sig_checks = None
+    if memory_sign.available():
+        memory_sign.baseline()
+        clean = memory_sign.verify(mg.load_graph(), quiet=True) == 0
+        graph = mg.load_graph()
+        graph["nodes"][cid]["content_hash"] = "f" * 64   # unsanctioned re-stamp
+        mg.save_graph(graph)
+        caught = memory_sign.verify(mg.load_graph(), quiet=True) == 1
+        memory_sign.sign_event(cid, "f" * 64, "reseal")  # sanctioned reseal
+        healed = memory_sign.verify(mg.load_graph(), quiet=True) == 0
+        sig_checks = {"clean": clean, "restamp_caught": caught, "reseal_heals": healed}
+        print(f"[14] signatures: clean {'PASS' if clean else 'FAIL'}, "
+              f"re-stamp caught {'PASS' if caught else 'FAIL'}, signed reseal "
+              f"{'PASS' if healed else 'FAIL'}")
+    else:
+        print("[14] signatures: SKIPPED (pynacl not installed)")
+    report["signatures"] = sig_checks
+
     report["total_seconds"] = round(time.time() - t0, 1)
     out = Path(VAULT) / "stress_report.json"
     out.write_text(json.dumps(report, indent=2, ensure_ascii=False),

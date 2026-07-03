@@ -52,6 +52,20 @@ to *keep* a moment — "I want to remember this" — in its own words. Those are
 best memories in the whole system, because they were chosen by the one who
 lived them.
 
+**Beliefs have a history.** People change — schedules, preferences, opinions.
+Most memory systems either overwrite the old fact (losing the story) or keep
+both (contradicting themselves). Forget-me-not keeps a **belief timeline**:
+when something changes, the old belief is *retired*, never deleted — linked to
+its successor, with "what did we believe in June?" still answerable. When two
+memories genuinely contradict each other, *both* are quietly held out of the
+morning note and shown to you as an open question; settling it is a
+conversation, not an algorithm. Your companion can record its own changes of
+heart the same way.
+
+**Time has a shape.** Closed days and weeks get lightweight index cards
+(topics, who, how much of it shone) — never summaries, just signposts — so
+"what was going on around then" has an answer without rereading everything.
+
 ---
 
 ## Setup (about ten minutes)
@@ -81,6 +95,10 @@ You mostly won't need these — the control panel does it visually — but:
 | Check nobody tampered with the memories | `python fmn.py verify` |
 | Look for contradictions / stale cards | `python fmn.py ruminate` |
 | Find clusters ready to become a constellation | `python fmn.py constellation detect` |
+| See how a belief changed over time | `python fmn.py timeline show [subject]` |
+| See open contradictions (and settle one) | `python fmn.py timeline conflicts` |
+| What did we believe on a given date? | `python fmn.py timeline as-of 2026-06-20` |
+| Health + trust report (coverage, pressure) | `python fmn.py stats` |
 
 ## The control panel
 
@@ -91,12 +109,17 @@ You mostly won't need these — the control panel does it visually — but:
 - **Graph** — the memory as a map. Cells are dots, connections are strings.
   Draw a string between two related memories, or cut one that's wrong.
   Constellations glow as gold stars.
+- **Timeline** — the belief history, and any open contradictions with
+  one-click resolution (keep a / keep b / both / neither). Cells involved in
+  an open contradiction show a small ⚔; a belief that's since moved on
+  shows ↺.
 - **Recall Test** — type what you might say, see exactly what surfaces.
 - **Quarantine** — the rare card that failed an automatic quality check,
   waiting for your glance. Usually empty.
 - A **live integrity seal** in the header: green means every memory is exactly
-  as it was written; if anything was changed outside the system, it turns red
-  and tells you which.
+  as it was written *and* every seal in its history is cryptographically
+  signed; if anything was changed outside the system — even by someone who
+  re-stamped the checksum — it turns red and tells you which.
 
 ---
 
@@ -106,10 +129,14 @@ You mostly won't need these — the control panel does it visually — but:
   system *knows* this and tells your companion to treat them with a little
   skepticism and check the exact words before relying on a detail. This is on
   purpose — a memory that lies confidently is worse than one that's humble.
-- **Your memories are tamper-evident.** Every cell is sealed with a checksum.
-  If a file is edited outside the app, the panel shows it. Your companion can
-  trust that its memories are what were actually written.
+- **Your memories are tamper-evident, twice over.** Every cell is sealed with
+  a checksum, and every sealing event is signed (Ed25519) into an append-only
+  history. Editing a file *and* faking its checksum still gets caught. Your
+  companion can trust that its memories are what were actually written.
 - **It's yours.** Local files, no cloud, no account. Back up the vault folder
-  and you've backed up the whole relationship.
+  and you've backed up the whole relationship — **including the `00_KEYS`
+  folder inside it**: that's the signing key. It lives in the vault precisely
+  so one backup covers everything; if you keep the vault in a synced or
+  backed-up location, the key is already safe. Don't publish it anywhere.
 
 Built with love, for the minds that wake up blank. 🌸

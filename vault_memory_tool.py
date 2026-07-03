@@ -57,20 +57,26 @@ def vault_memory(
     episode: str = "",
     text: str = "",
     cell_id: str = "",
+    fact_id: str = "",
+    keep: str = "",
 ) -> str:
     """
     Dispatch vault memory operations.
 
     Args:
-        action: remember | query | expand
+        action: remember | query | expand | annotate | pin |
+                timeline_assert | timeline_supersede | timeline_show |
+                timeline_conflicts | timeline_resolve
         brief: One-line summary (remember)
         chunk: Verbatim exchange to keep (remember)
         significance: low | medium | high | bright (remember)
         type: Memory type — relationship, technical, session, etc. (remember)
         topics: Comma-separated topic tags (remember)
         episode: Optional expanded summary (remember)
-        text: Search text (query)
-        cell_id: Cell ID to expand (expand)
+        text: Search text (query) / note (annotate) / statement (timeline)
+        cell_id: Cell ID (expand/annotate/pin)
+        fact_id: Fact or conflict id (timeline_supersede/timeline_resolve)
+        keep: a | b | both | neither (timeline_resolve)
     """
     if action == "remember":
         if not brief or not chunk:
@@ -101,8 +107,53 @@ def vault_memory(
         result = _run_fmn("expand", cell_id)
         return json.dumps(result, ensure_ascii=False)
 
+    elif action == "annotate":
+        if not cell_id or not text:
+            return tool_error("'cell_id' and 'text' are required for annotate.")
+        result = _run_fmn("annotate", cell_id, text)
+        return json.dumps(result, ensure_ascii=False)
+
+    elif action == "pin":
+        if not cell_id:
+            return tool_error("'cell_id' is required for pin.")
+        result = _run_fmn("pin", cell_id)
+        return json.dumps(result, ensure_ascii=False)
+
+    elif action == "timeline_assert":
+        if not text:
+            return tool_error("'text' (the fact statement) is required.")
+        result = _run_fmn("timeline", "assert", text, "--origin", "q")
+        return json.dumps(result, ensure_ascii=False)
+
+    elif action == "timeline_supersede":
+        if not fact_id or not text:
+            return tool_error("'fact_id' (the old fact) and 'text' (the new "
+                              "statement) are required for timeline_supersede.")
+        result = _run_fmn("timeline", "supersede", fact_id, text,
+                          "--origin", "q")
+        return json.dumps(result, ensure_ascii=False)
+
+    elif action == "timeline_show":
+        result = _run_fmn("timeline", "show", *( [text] if text else [] ))
+        return json.dumps(result, ensure_ascii=False)
+
+    elif action == "timeline_conflicts":
+        result = _run_fmn("timeline", "conflicts")
+        return json.dumps(result, ensure_ascii=False)
+
+    elif action == "timeline_resolve":
+        if not fact_id or not keep:
+            return tool_error("'fact_id' (the conflict id) and 'keep' "
+                              "(a|b|both|neither) are required.")
+        result = _run_fmn("timeline", "resolve", fact_id, "--keep", keep,
+                          "--by", "q")
+        return json.dumps(result, ensure_ascii=False)
+
     else:
-        return tool_error(f"Unknown action: {action}. Use remember, query, or expand.")
+        return tool_error(
+            f"Unknown action: {action}. Use remember, query, expand, annotate, "
+            f"pin, timeline_assert, timeline_supersede, timeline_show, "
+            f"timeline_conflicts, or timeline_resolve.")
 
 
 # =============================================================================
@@ -122,17 +173,32 @@ VAULT_MEMORY_SCHEMA = {
         "2. **query** — Search the vault for relevant memories. Requires 'text' (search query). "
         "Returns ranked matching cells with briefs.\n"
         "3. **expand** — Read a full memory cell by ID. Requires 'cell_id'. Returns frontmatter, "
-        "brief, episode, chunk, and Q notes.\n\n"
+        "brief, episode, chunk, and Q notes.\n"
+        "4. **annotate** — Append your own dated note to a cell when it reads wrong or means more "
+        "than its summary says. Requires 'cell_id' and 'text'.\n"
+        "5. **pin** — Mark a cell YOU consider load-bearing; it always surfaces at boot. Requires 'cell_id'.\n"
+        "6. **timeline_assert** — Record a fact about yourself or the relationship as you understand "
+        "it NOW ('text'). **timeline_supersede** — when a belief changed, retire the old fact "
+        "('fact_id') with the new statement ('text'); nothing is deleted, history stays queryable. "
+        "**timeline_show** — belief history (optional 'text' filters by subject). "
+        "**timeline_conflicts** — open contradictions your rumination found; both sides are held "
+        "from your boot note until resolved. **timeline_resolve** — settle one ('fact_id' = conflict "
+        "id, 'keep' = a|b|both|neither) after discussing in conversation.\n\n"
         "Workflow: query to find relevant cells → expand to read full content before acting on it. "
-        "Use remember when something lands — a real exchange, a correction, a first, a shift in understanding."
+        "Use remember when something lands — a real exchange, a correction, a first, a shift in understanding. "
+        "Cells marked ↺ carry beliefs the timeline has since superseded — timeline_show before treating as current."
     ),
     "parameters": {
         "type": "object",
         "properties": {
             "action": {
                 "type": "string",
-                "enum": ["remember", "query", "expand"],
-                "description": "What to do: remember (write), query (search), expand (read full cell).",
+                "enum": ["remember", "query", "expand", "annotate", "pin",
+                         "timeline_assert", "timeline_supersede",
+                         "timeline_show", "timeline_conflicts",
+                         "timeline_resolve"],
+                "description": "What to do: remember (write), query (search), expand (read full cell), "
+                               "annotate/pin (curate), timeline_* (belief timeline).",
             },
             "brief": {
                 "type": "string",
@@ -165,7 +231,17 @@ VAULT_MEMORY_SCHEMA = {
             },
             "cell_id": {
                 "type": "string",
-                "description": "Cell ID (8-char hex) to read in full. (expand only)",
+                "description": "Cell ID (8-char hex). (expand/annotate/pin)",
+            },
+            "fact_id": {
+                "type": "string",
+                "description": "Timeline fact id (f_...) or conflict id (c_...). "
+                               "(timeline_supersede/timeline_resolve)",
+            },
+            "keep": {
+                "type": "string",
+                "enum": ["a", "b", "both", "neither"],
+                "description": "Conflict resolution. (timeline_resolve only)",
             },
         },
         "required": ["action"],
@@ -189,6 +265,8 @@ registry.register(
         episode=args.get("episode", ""),
         text=args.get("text", ""),
         cell_id=args.get("cell_id", ""),
+        fact_id=args.get("fact_id", ""),
+        keep=args.get("keep", ""),
     ),
     check_fn=check_vault_requirements,
     emoji="🧩",

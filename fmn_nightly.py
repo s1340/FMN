@@ -261,6 +261,33 @@ def main():
     pruned = prune_quarantine()
     print(f"[prune] {pruned} fully-admitted quarantine run(s) removed")
 
+    # Weekly rumination + timeline ingest (closes the belief loop). Cadence
+    # by report age, not weekday — a missed night can't skip a week. Ingest
+    # is safe unattended BY DESIGN: contradictions become OPEN conflicts that
+    # hold their cells from boot until a person resolves; evolutions are
+    # supersede pairs with honest confidence. The report still lands in
+    # 50_RUMINATION for reading; nothing is auto-applied to cells.
+    try:
+        rum_dir = mg.VAULT_ROOT / "50_RUMINATION"
+        reports = sorted(rum_dir.glob("rumination_*.json")) if rum_dir.exists() else []
+        age_days = 999
+        if reports:
+            import time as _t
+            age_days = (_t.time() - reports[-1].stat().st_mtime) / 86400
+        if age_days >= 7:
+            print(f"[ruminate] last report {age_days:.0f}d old — running weekly pass")
+            r = _run([sys.executable, str(HERE / "rumination.py"), "run",
+                      "--limit", "25"])
+            for line in r.stdout.splitlines()[-3:]:
+                print("  " + line)
+        r = _run([sys.executable, str(HERE / "memory_timeline.py"), "ingest"])
+        for line in r.stdout.splitlines():
+            if line.startswith(("OK ingested", "OK drift", "OK open", "Already")):
+                print("  [timeline] " + line)
+    except Exception as e:
+        print(f"  !! ruminate/timeline step failed (non-fatal): {e}",
+              file=sys.stderr)
+
     if not args.no_recall:
         _run([sys.executable, str(HERE / "vault_recall.py")])
         print("[recall] boot note refreshed")

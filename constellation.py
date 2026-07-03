@@ -141,6 +141,16 @@ def curate_bundle(graph: dict, member_ids: list[str]) -> str:
         "This gist becomes the constellation's face; the episodes live inside it.",
         "",
     ]
+    # Continuity window (w=3): the gists you already hold, so a new bond is
+    # written knowing the shape of the others — one story, not disjoint files.
+    priors = sorted((n for n in graph["nodes"].values()
+                     if n.get("kind") == "constellation"),
+                    key=lambda n: str(n.get("created", "")), reverse=True)[:3]
+    if priors:
+        lines.append("Your existing constellations (for continuity):")
+        for p in reversed(priors):
+            lines.append(f"- {p.get('name', p['cell_id'])}: {p.get('brief','')[:120]}")
+        lines.append("")
     for cid in member_ids:
         node = graph["nodes"].get(cid)
         if not node:

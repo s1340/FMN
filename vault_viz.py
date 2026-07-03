@@ -163,8 +163,58 @@ def api_integrity():
             ok += 1
         else:
             drifted.append(cid)
+    # Signature layer (memory_sign): the seal is only as good as its history
+    sig = {"active": False}
+    try:
+        import io, contextlib
+        import memory_sign
+        if memory_sign.available():
+            buf = io.StringIO()
+            with contextlib.redirect_stdout(buf):
+                bad = memory_sign.verify(graph, quiet=True)
+            sig = {"active": True, "ok": bad == 0,
+                   "detail": buf.getvalue().strip()}
+    except Exception:
+        pass
     return jsonify({"available": True, "intact": ok,
-                    "drifted": drifted, "unhashed": unhashed})
+                    "drifted": drifted, "unhashed": unhashed,
+                    "signatures": sig})
+
+
+@app.route("/api/timeline")
+def api_timeline():
+    """Belief timeline state: facts (active + retired) and conflicts."""
+    try:
+        import memory_timeline as tl
+        state = tl.replay()
+        facts = sorted(state["facts"].values(), key=lambda f: f["tx"])
+        conflicts = sorted(state["conflicts"].values(), key=lambda c: c["tx"])
+        chain_ok = True
+        import io, contextlib
+        with contextlib.redirect_stdout(io.StringIO()):
+            chain_ok = tl.verify_chain()
+        return jsonify({"available": True, "facts": facts,
+                        "conflicts": conflicts, "chain_ok": chain_ok})
+    except Exception as e:
+        return jsonify({"available": False, "error": str(e)})
+
+
+@app.route("/api/timeline/resolve", methods=["POST"])
+def api_timeline_resolve():
+    """Mal's hand on a conflict, from the panel."""
+    data = request.json or {}
+    cid, keep = data.get("conflict_id", ""), data.get("keep", "")
+    if not cid or keep not in ("a", "b", "both", "neither"):
+        return jsonify({"ok": False, "error": "conflict_id + keep required"}), 400
+    try:
+        import io, contextlib
+        import memory_timeline as tl
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            ok = tl.do_resolve(cid, keep, by="mal-panel")
+        return jsonify({"ok": bool(ok), "log": buf.getvalue().strip()})
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)}), 500
 
 
 @app.route("/api/cell/<cell_id>")
@@ -556,6 +606,7 @@ select.fi { cursor:pointer; }
     <button class="tab" data-tab="quarantine">Quarantine</button>
     <button class="tab" data-tab="slots">Boot Slots</button>
     <button class="tab" data-tab="graph">Graph</button>
+    <button class="tab" data-tab="timeline">Timeline</button>
     <button class="tab" data-tab="recall">Recall Test</button>
   </div>
   <div id="stats">—</div>
@@ -576,6 +627,7 @@ select.fi { cursor:pointer; }
         <button class="fb" data-f="correction">correction</button>
         <button class="fb" data-f="reflection">reflection</button>
         <button class="fb" data-f="personal_q">personal Q</button>
+        <button class="fb" data-f="rollup" title="calendar index nodes (day/week)">▤ rollups</button>
       </div>
       <div class="cell-list" id="cell-list"></div>
     </div>
@@ -611,6 +663,16 @@ select.fi { cursor:pointer; }
       <div id="qtest-results"></div>
     </div>
   </div>
+  <!-- TIMELINE -->
+  <div id="tab-timeline" class="hidden" style="flex:1;overflow:hidden;flex-direction:column;">
+    <div class="tview" id="timeline-view">
+      <div style="font-size:11px;color:var(--muted);margin-bottom:10px;">
+        The belief timeline — how facts about Mal &amp; Q changed. Nothing here is
+        ever deleted: superseded beliefs are retired with lineage. Open conflicts
+        hold their cells out of Q's boot until resolved (that's your hand, or his).</div>
+      <div id="timeline-content"><div class="empty">loading…</div></div>
+    </div>
+  </div>
   <!-- GRAPH -->
   <div id="tab-graph" class="hidden" style="flex:1;overflow:hidden;position:relative;">
     <div class="gview">
@@ -638,8 +700,10 @@ async function init() {
   const flaggedN = tc.flagged || 0;
   const trustStr = `${(tc.human||0)}h/${(tc.checked||0)}c/${(tc.auto||0)}a` +
                    (flaggedN ? ` · <span style="color:var(--corr)">${flaggedN} flagged</span>` : '');
+  const nCells = allNodes.filter(n => n.kind !== 'rollup').length;
+  const nRoll = allNodes.length - nCells;
   document.getElementById('stats').innerHTML =
-    `${allNodes.length} cells · ${d.n_bright} bright · ${allEdges.length} strings · trust ${trustStr}` +
+    `${nCells} cells${nRoll ? ` · ${nRoll} rollups` : ''} · ${d.n_bright} bright · ${allEdges.length} strings · trust ${trustStr}` +
     ` · <span id="integ" style="color:var(--muted)">integrity…</span>`;
   renderList();
   // Integrity seal check (async — re-hashes the vault)
@@ -652,14 +716,74 @@ async function init() {
       el.innerHTML = `<span style="color:#ff6b6b;font-weight:bold">⚠ ${iv.drifted.length} DRIFTED</span>`;
       el.title = 'Cells edited outside the system: ' + iv.drifted.join(', ');
     } else {
-      el.innerHTML = `<span style="color:#4caf50">✓ ${iv.intact} sealed</span>`;
+      const sig = iv.signatures || {};
+      const sigStr = !sig.active ? ''
+        : sig.ok ? ' · <span style="color:#4caf50" title="Ed25519 seal-event log intact">✓ signed</span>'
+        : ` · <span style="color:#ff6b6b;font-weight:bold" title="${(sig.detail||'').replace(/"/g,'')}">⚠ SIGNATURE</span>`;
+      el.innerHTML = `<span style="color:#4caf50">✓ ${iv.intact} sealed</span>` + sigStr;
     }
   } catch(e) {}
 }
 
+// ── Belief timeline tab ───────────────────────────────────────────────────────
+async function loadTimeline() {
+  const box = document.getElementById('timeline-content');
+  box.innerHTML = '<div class="empty">loading…</div>';
+  const r = await fetch('/api/timeline');
+  const d = await r.json();
+  if (!d.available) { box.innerHTML = `<div class="empty">timeline unavailable: ${d.error||''}</div>`; return; }
+  const open = (d.conflicts||[]).filter(c => c.status === 'open');
+  const facts = d.facts || [];
+  let html = '';
+  html += `<div style="margin-bottom:8px;font-size:11px;color:${d.chain_ok?'#4caf50':'#ff6b6b'}">`
+        + (d.chain_ok ? '✓ ledger chain intact' : '⚠ LEDGER CHAIN BROKEN — investigate before trusting') + '</div>';
+  if (open.length) {
+    html += `<h3 style="color:#ff9800;font-size:13px;margin:10px 0 6px">⚔ Open conflicts (${open.length}) — held from Q's boot</h3>`;
+    for (const c of open) {
+      const fa = facts.find(f => f.id === c.fact_a) || {};
+      const fb = facts.find(f => f.id === c.fact_b) || {};
+      html += `<div style="border:1px solid #ff9800;border-radius:4px;padding:8px;margin-bottom:8px;font-size:12px">
+        <div style="color:var(--muted);margin-bottom:4px">${c.explanation||''}</div>
+        <div><b>a</b> (${c.fact_a_cell||'?'}): "${(fa.statement||'').slice(0,140)}"</div>
+        <div><b>b</b> (${c.fact_b_cell||'?'}): "${(fb.statement||'').slice(0,140)}"</div>
+        <div style="margin-top:6px">${['a','b','both','neither'].map(k =>
+          `<button class="tab" style="margin-right:4px" onclick="resolveConflict('${c.id}','${k}')">keep ${k}</button>`).join('')}
+        </div></div>`;
+    }
+  } else {
+    html += `<div style="font-size:12px;color:var(--muted);margin:8px 0">No open conflicts.</div>`;
+  }
+  html += `<h3 style="font-size:13px;margin:14px 0 6px">Belief history (${facts.length} facts)</h3>`;
+  for (const f of [...facts].reverse()) {
+    const dead = !!f.retired;
+    const succ = dead && f.retired.successor ? ` → ${f.retired.successor}` : '';
+    html += `<div style="font-size:12px;padding:3px 0;${dead?'opacity:.55':''}">
+      ${dead?'<span title="retired">↺</span>':'<span style="color:#4caf50">●</span>'}
+      <span style="color:var(--muted)">${(f.tx||'').slice(0,10)}</span>
+      ${(f.statement||'').slice(0,150)}
+      <span style="color:var(--muted)">(${f.origin||'?'}, conf ${f.confidence??'?'})${dead ? ' · retired: '+(f.retired.reason||'')+succ : ''}</span>
+    </div>`;
+  }
+  if (!facts.length) html += `<div class="empty">Nothing on the timeline yet — it fills from rumination ingests and Q's own assertions.</div>`;
+  box.innerHTML = html;
+}
+
+async function resolveConflict(cid, keep) {
+  if (!confirm(`Resolve ${cid}: keep ${keep}? The loser is retired (never deleted) and its cells release back to boot.`)) return;
+  const r = await fetch('/api/timeline/resolve', {method:'POST',
+    headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({conflict_id: cid, keep})});
+  const d = await r.json();
+  toast(d.ok ? 'resolved — cells released' : ('failed: ' + (d.error||'')));
+  loadTimeline(); init();
+}
+
 // ── List ──────────────────────────────────────────────────────────────────────
 function renderList() {
-  let nodes = allNodes;
+  // Rollups are calendar indexes, not memories — hidden unless asked for
+  let nodes = currentFilter === 'rollup'
+    ? allNodes.filter(n => n.kind === 'rollup')
+    : allNodes.filter(n => n.kind !== 'rollup');
   if (currentFilter === 'bright') nodes = nodes.filter(n => n.significance === 'bright');
   else if (currentFilter === 'reflection_candidate') nodes = nodes.filter(n => n.reflection_candidate);
   else if (currentFilter === 'flagged') nodes = nodes.filter(n => n.trust === 'flagged');
@@ -682,8 +806,10 @@ function renderList() {
               : tr === 'auto'    ? '<span class="trb tr-auto" title="unverified — earned by use">°</span>'
               : tr === 'checked' ? '<span class="trb tr-checked" title="verified by use">✓</span>'
               : '<span class="trb tr-human" title="human-verified">✓✓</span>';
+    const drift = n.timeline_superseded ? '<span class="trb" style="color:#ff9800" title="belief since superseded — see Timeline tab">↺</span>' : '';
+    const conf = n.in_conflict ? '<span class="trb" style="color:#ff6b6b" title="in an OPEN contradiction — held from boot until resolved (Timeline tab)">⚔</span>' : '';
     return `<div class="ci${selId===n.cell_id?' sel':''}" onclick="selCell('${n.cell_id}')">
-      <div class="ci-meta"><span class="sb ${sc}">${sl} ${n.significance||'medium'}</span><span class="tb ${tc}">${tl}</span>${trb}${rd}</div>
+      <div class="ci-meta"><span class="sb ${sc}">${sl} ${n.significance||'medium'}</span><span class="tb ${tc}">${tl}</span>${trb}${drift}${conf}${rd}</div>
       <div class="ci-brief">${esc(n.brief||'')}</div>
       <div class="ci-date">${n.session_date||''} · ${n.temporal_status||''}</div>
     </div>`;
@@ -956,8 +1082,11 @@ function initGraph() {
   const g = svg.append('g');
   svg.call(d3.zoom().scaleExtent([0.2, 5]).on('zoom', e => g.attr('transform', e.transform)));
 
-  const nodeMap = Object.fromEntries(allNodes.map(n => [n.cell_id, n]));
-  const nodes = allNodes.map(n => ({...n, id: n.cell_id}));
+  // Rollups stay out of the physics: edge-less calendar indexes would float
+  // as unexplained gray moons; the Timeline tab is their home.
+  const graphNodes = allNodes.filter(n => n.kind !== 'rollup');
+  const nodeMap = Object.fromEntries(graphNodes.map(n => [n.cell_id, n]));
+  const nodes = graphNodes.map(n => ({...n, id: n.cell_id}));
   const links = allEdges
     .filter(e => nodeMap[e.a] && nodeMap[e.b])
     .map(e => ({...e, source: e.a, target: e.b}));
@@ -1109,7 +1238,7 @@ document.querySelectorAll('.tab').forEach(tab => tab.addEventListener('click', (
   document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
   tab.classList.add('active');
   const id = tab.dataset.tab;
-  ['vault','quarantine','slots','graph','recall'].forEach(t => {
+  ['vault','quarantine','slots','graph','timeline','recall'].forEach(t => {
     const el = document.getElementById('tab-'+t);
     el.classList.toggle('hidden', t !== id);
     el.style.display = t === id ? 'flex' : '';
@@ -1117,6 +1246,7 @@ document.querySelectorAll('.tab').forEach(tab => tab.addEventListener('click', (
   if (id === 'quarantine') loadQ();
   if (id === 'slots') loadSlots();
   if (id === 'graph') { el_graph_fix(); }
+  if (id === 'timeline') loadTimeline();
   if (id === 'recall') setTimeout(() => document.getElementById('qtest').focus(), 50);
 }));
 

@@ -230,6 +230,21 @@ def cmd_curate(dry: bool) -> int:
     lines = [CURATION_HEADER.format(
         date=datetime.now(timezone.utc).strftime("%Y-%m-%d"), cell_ids=ids)]
 
+    # Continuity window (TiMem w=3): your last reflections, so this one can
+    # continue a thread instead of starting cold each time. Briefs only —
+    # they are YOUR conclusions, pointers to your own full texts.
+    priors = sorted((n for n in graph["nodes"].values()
+                     if n.get("semantic_type") == "reflection"),
+                    key=lambda n: str(n.get("created", "")), reverse=True)[:3]
+    if priors:
+        lines.append("\n## Continuity — what you concluded last (newest first)")
+        for p in reversed(priors):
+            lines.append(f"- ({str(p.get('session_date',''))[:10]}) "
+                         f"{p.get('brief','')}")
+        lines.append("\nIf tonight's moments continue one of these threads, "
+                     "say so; if they contradict one, that is worth writing "
+                     "about most of all.")
+
     for node, chunk in bundle:
         lines.append(f"\n---\n\n## {node['cell_id']} — {', '.join(node.get('topics', []))}")
         lines.append(f"*{node.get('session_date')} · {node.get('significance')} · "

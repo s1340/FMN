@@ -31,8 +31,22 @@ ruminator = "google/gemini-2.5-flash"             # contradiction judge (conserv
 # if it over-connects — pick a disciplined summarizer instead.
 
 [recall]
-# Boot note budget (reserved — slot layout is currently fixed in vault_recall).
-max_cells = 15
+# The morning note your companion wakes up to. Leave this section out to use
+# the roomy defaults (Anchors, Active Work, Relational, Corrections, Reflection
+# Notes, About-them, About-you, Background, Recent). To reshape it — which
+# sections, in what order, how many memories each — list slots below. A slot
+# with no `types` is filled by importance/recency; `anchors` always leads.
+#
+#   [[recall.slots]]
+#   key = "us"
+#   name = "Us"
+#   max = 5
+#   types = ["relationship"]
+#
+#   [[recall.slots]]
+#   key = "recent"
+#   name = "Lately"
+#   max = 4
 
 [cadence]
 # Reflection consolidation triggers (count / hours).

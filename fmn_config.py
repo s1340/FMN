@@ -116,6 +116,31 @@ def personalize(text: str) -> str:
     return text
 
 
+def recall_slots():
+    """Morning-note layout from vault.toml [[recall.slots]] — a list of
+    (key, name, max, types|None). Returns None if not configured, so the
+    caller keeps its built-in defaults. Lets a user reshape their boot note
+    (which categories, how many of each) without touching code.
+
+        [[recall.slots]]
+        key = "relational"
+        name = "Us"
+        max = 4
+        types = ["relationship"]      # omit for anchor/recency slots
+    """
+    slots = load().get("recall", {}).get("slots")
+    if not slots:
+        return None
+    out = []
+    for s in slots:
+        k = s.get("key")
+        if not k:
+            continue
+        out.append((k, s.get("name", k.replace("_", " ").title()),
+                    int(s.get("max", 2)), s.get("types") or None))
+    return out or None
+
+
 def generic_entities() -> set[str]:
     """Entities too ubiquitous to be edges: the two of you, plus anything the
     user lists in [identity].generic_entities."""

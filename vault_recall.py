@@ -63,16 +63,31 @@ RECALL_START = "<!-- VAULT_RECALL_START -->"
 RECALL_END   = "<!-- VAULT_RECALL_END -->"
 
 # Slot config: (slot_key, display_name, max_cells, semantic_types)
-# semantic_types=None → filled by flag/recency logic, not type matching
-SLOTS = [
-    ("anchors",     "Anchors",          3, None),
-    ("active_work", "Active Work",      2, ["work_research"]),
-    ("relational",  "Relational",       2, ["relationship"]),
-    ("corrections", "Corrections",      2, ["correction"]),
-    ("reflection",  "Reflection Notes", 1, ["reflection"]),
-    ("background",  "Background",       1, ["environment_tools", *_ptypes()]),
-    ("recent",      "Recent",           2, None),
+# semantic_types=None → filled by flag/recency logic, not type matching.
+# Roomier defaults (2026-07-05, Mal wanted many more slots); personal cells
+# get their own slots instead of sharing Background. A 'anchors' slot must
+# always exist (constellations/pinned/bright lead there).
+_DEFAULT_SLOTS = [
+    ("anchors",     "Anchors",           4, None),
+    ("active_work", "Active Work",       4, ["work_research"]),
+    ("relational",  "Relational",        3, ["relationship"]),
+    ("corrections", "Corrections",       2, ["correction"]),
+    ("reflection",  "Reflection Notes",  2, ["reflection"]),
+    ("about_you",   f"About {_companion()}", 2, [_ptypes()[1]]),
+    ("about_human", f"About {_human()}",  2, [_ptypes()[0]]),
+    ("background",  "Background",         2, ["environment_tools"]),
+    ("recent",      "Recent",            3, None),
 ]
+# vault.toml [[recall.slots]] overrides the defaults if present (customizable).
+try:
+    from fmn_config import recall_slots as _recall_slots
+    SLOTS = _recall_slots() or _DEFAULT_SLOTS
+except Exception:
+    SLOTS = _DEFAULT_SLOTS
+# The anchors slot is load-bearing (Pass 0/1); if a custom config dropped it,
+# fall back so recall never crashes.
+if not any(k == "anchors" for k, *_ in SLOTS):
+    SLOTS = [("anchors", "Anchors", 4, None), *SLOTS]
 
 
 # ── Heuristic semantic_type inference (for cells without the field) ──────────

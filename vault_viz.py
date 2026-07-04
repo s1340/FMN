@@ -1253,9 +1253,12 @@ function initGraph() {
     .attr('shape-rendering', 'crispEdges')
     .attr('cursor', 'pointer')
     .call(d3.drag()
-      .on('start', (e,d) => { if (!e.active) sim.alphaTarget(0.3).restart(); d.fx=d.x; d.fy=d.y; })
+      // Drag moves ONLY the grabbed cell. Once the board has settled every
+      // node is pinned (see freeze-on-end), so nudging one no longer reheats
+      // the whole map. A dropped cell stays where you put it.
+      .on('start', (e,d) => { d.fx=d.x; d.fy=d.y; sim.alphaTarget(0.1).restart(); })
       .on('drag',  (e,d) => { d.fx=e.x; d.fy=e.y; })
-      .on('end',   (e,d) => { if (!e.active) sim.alphaTarget(0); d.fx=null; d.fy=null; }))
+      .on('end',   (e,d) => { sim.alphaTarget(0); }))
     .on('mouseover', (e,d) => {
       const tt = document.getElementById('tooltip');
       tt.style.display='block'; tt.style.left=(e.pageX+12)+'px'; tt.style.top=(e.pageY-8)+'px';
@@ -1298,16 +1301,52 @@ function initGraph() {
   const N = nodes.length || 1;
   const chargeStr = -150 * Math.max(1, Math.sqrt(N / 60));
   const isSem = d => d.type === 'semantic_sim';
+
+  // ── Cluster by MEANING, not by chat (Mal 2026-07-05) ──────────────────────
+  // Each semantic TYPE gets an anchor on a ring, so same-type cells share a
+  // region (primary grouping). WITHIN a type, a recurring topic pulls its cells
+  // into a tighter sub-clump (secondary). Type outweighs the session/entity
+  // edges, so the map reads as themes — relationship here, reflection there —
+  // and inside work_research the recurring projects (FMN, ghost-hunt,
+  // mech-interp) self-separate instead of all sitting in one blue mass.
+  const cx = W/2, cy = H/2, ringR = Math.min(W,H) * 0.34;
+  const typeList = [...new Set(nodes.map(n => n.semantic_type || 'work_research'))];
+  const typeAnchor = {};
+  typeList.forEach((t,i) => { const a = (i/typeList.length)*2*Math.PI - Math.PI/2;
+    typeAnchor[t] = { x: cx + ringR*Math.cos(a), y: cy + ringR*Math.sin(a) }; });
+  const topicFreq = {};
+  nodes.forEach(n => (n.topics||[]).forEach(t =>
+    topicFreq[String(t).toLowerCase()] = (topicFreq[String(t).toLowerCase()]||0) + 1));
+  const ubiq = Math.max(6, N * 0.25);   // a topic on >25% of cells is a theme, not a group
+  nodes.forEach(n => {
+    const cands = (n.topics||[]).map(t => String(t).toLowerCase())
+      .filter(t => topicFreq[t] >= 3 && topicFreq[t] <= ubiq)
+      .sort((a,b) => topicFreq[b] - topicFreq[a]);
+    n._sub = cands[0] ? ((n.semantic_type||'work_research') + '::' + cands[0]) : null;
+  });
+  function forceCluster(alpha) {
+    const sub = {};
+    for (const n of nodes) { if (!n._sub) continue;
+      const s = sub[n._sub] || (sub[n._sub] = {x:0,y:0,c:0}); s.x+=n.x; s.y+=n.y; s.c++; }
+    for (const k in sub) { sub[k].x/=sub[k].c; sub[k].y/=sub[k].c; }
+    const kType = 0.14, kSub = 0.22;
+    for (const n of nodes) {
+      const ta = typeAnchor[n.semantic_type || 'work_research'];
+      if (ta) { n.vx += (ta.x - n.x)*kType*alpha; n.vy += (ta.y - n.y)*kType*alpha; }
+      const s = n._sub && sub[n._sub];
+      if (s) { n.vx += (s.x - n.x)*kSub*alpha; n.vy += (s.y - n.y)*kSub*alpha; }
+    }
+  }
+
   const sim = d3.forceSimulation(nodes)
+    // Edges pull loosely now — TYPE clustering leads, edges only gently
+    // connect (Mal: type should beat same-chat).
     .force('link', d3.forceLink(links).id(d=>d.id)
-        .distance(d => isSem(d) ? 100 : 55 + (d.weight||1)*12)
-        .strength(d => isSem(d) ? 0.02 : 0.14))
+        .distance(d => isSem(d) ? 110 : 60 + (d.weight||1)*10)
+        .strength(d => isSem(d) ? 0.015 : 0.06))
     .force('charge', d3.forceManyBody().strength(chargeStr).distanceMax(600))
     .force('center', d3.forceCenter(W/2, H/2))
-    // Gentle gravity so weakly-connected cells don't drift to the void, but
-    // light enough not to pile everyone onto the center.
-    .force('gx', d3.forceX(W/2).strength(0.025))
-    .force('gy', d3.forceY(H/2).strength(0.025))
+    .force('cluster', forceCluster)
     .force('collision', d3.forceCollide().radius(d => (SIG_R[d.significance]||9) + 7))
     .on('tick', () => {
       link.attr('x1',d=>d.source.x).attr('y1',d=>d.source.y)
@@ -1327,6 +1366,10 @@ function initGraph() {
     });
 
   graphSim = sim;
+  // Freeze the board once it settles into its theme regions: pin every node so
+  // that afterwards dragging a single cell moves ONLY that cell, and the map
+  // stops swimming on every touch.
+  sim.on('end', () => { nodes.forEach(n => { if (n.fx == null) { n.fx = n.x; n.fy = n.y; } }); });
   renderLegend();
 }
 

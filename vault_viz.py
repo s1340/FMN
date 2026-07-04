@@ -721,6 +721,10 @@ h1 { color:#fff; font-size:15px; letter-spacing:0; display:flex; align-items:cen
 #graph-svg { background:var(--canvas); }
 .leg-dot { border:1px solid var(--text); }
 .empty, .semp { color:var(--muted); }
+/* hover was var(--accent) = the pale title blue → near-invisible on the
+   light desktop. Give list rows a proper highlight bar instead. */
+.neigh-item:hover, .qr:hover { background:#dbe4f7 !important; color:#16244a !important; }
+.neigh-item:hover .neigh-brief, .neigh-item:hover .neigh-type { color:#16244a; }
 @keyframes ants { to { stroke-dashoffset:-14; } }
 .ant-box { animation: ants .6s linear infinite; }
 </style>

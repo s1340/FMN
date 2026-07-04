@@ -482,6 +482,9 @@ HTML = r"""<!DOCTYPE html>
 <meta charset="UTF-8">
 <title>Forget-me-not</title>
 <link rel="icon" type="image/svg+xml" href="/favicon.svg">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Pixelify+Sans:wght@400;500;600&display=swap" rel="stylesheet">
 <script src="https://d3js.org/d3.v7.min.js"></script>
 <style>
 * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -618,18 +621,115 @@ select.fi { cursor:pointer; }
 .hidden { display:none !important; }
 .toast { position:fixed; bottom:18px; right:18px; background:var(--surface2); border:1px solid var(--border); color:var(--text); padding:8px 14px; border-radius:3px; font-size:12px; opacity:0; transition:opacity .2s; pointer-events:none; z-index:999; }
 .toast.show { opacity:1; }
+
+/* ══════════════════════════════════════════════════════════════════════════
+   EARLY-GUI PIXEL THEME (2026-07-05) — the little gray machine.
+   Appended so it overrides the base rules by cascade; class names unchanged
+   so all the JS keeps working. Bevels: raised = hl top-left / sh bottom-right;
+   sunken = the reverse. Sharp corners everywhere. Pixelify Sans throughout.
+   ══════════════════════════════════════════════════════════════════════════ */
+:root {
+  --bg:#eeeee6; --surface:#d8d8d0; --surface2:#c9c9c0;
+  --border:#7c7c74; --text:#161611; --muted:#5a5a54;
+  --accent:#8fb0e8; --bright:#efc842;
+  --face:#c9c9c0; --hl:#ffffff; --sh:#7c7c74; --canvas:#f6f6f0;
+  --rel:#8a3fb0; --work:#2f6bc0; --corr:#b8421f; --refl:#3c7a1a;
+  --env:#1f7a6a; --pmal:#9a6a10; --pq:#b03a66;
+}
+* { border-radius:0 !important; }
+body { background:var(--face); color:var(--text);
+  font-family:'Pixelify Sans','JetBrains Mono',monospace; font-size:14px; }
+::-webkit-scrollbar { width:15px; height:15px; }
+::-webkit-scrollbar-track { background:#bfbfb6; }
+::-webkit-scrollbar-thumb { background:#c9c9c0; border:2px solid;
+  border-color:var(--hl) var(--sh) var(--sh) var(--hl); }
+
+/* the window bevels the whole app */
+body { border:2px solid; border-color:var(--hl) #4a4a44 #4a4a44 var(--hl); }
+header { background:var(--accent); color:#fff; border-bottom:2px solid #5f7bb0;
+  padding:6px 10px; }
+h1 { color:#fff; font-size:15px; letter-spacing:0; }
+#stats { color:#eef; font-size:12px; }
+
+/* tabs: raised chips, active one pressed-in + highlighted */
+.tab, .fb { background:var(--face); color:var(--text); font-size:12px;
+  border:2px solid !important; border-color:var(--hl) var(--sh) var(--sh) var(--hl);
+  padding:4px 11px; }
+.tab.active { background:#eef3ff; color:#16244a;
+  border-color:var(--sh) var(--hl) var(--hl) var(--sh); }
+.fb.on { background:#eef3ff; color:#16244a;
+  border-color:var(--sh) var(--hl) var(--hl) var(--sh); }
+
+/* buttons: raised, press-in on click */
+.recall-btn, .save-btn, .appr, .exbtn, .bri-btn, .pin-btn, .mute-btn, .linkb {
+  background:var(--face) !important; color:var(--text) !important; font-size:12px;
+  border:2px solid !important; border-color:var(--hl) var(--sh) var(--sh) var(--hl) !important; }
+.recall-btn:hover, .appr:hover, .save-btn:hover { background:#dedede !important; }
+.recall-btn:active, .save-btn:active, .appr:active, .exbtn:active, .bri-btn:active,
+.pin-btn:active, .mute-btn:active {
+  border-color:var(--sh) var(--hl) var(--hl) var(--sh) !important; }
+.bri-btn.on { background:var(--bright) !important; color:#161611 !important;
+  border-color:var(--sh) var(--hl) var(--hl) var(--sh) !important; }
+.pin-btn.on { background:#fff4cf !important;
+  border-color:var(--sh) var(--hl) var(--hl) var(--sh) !important; }
+.mute-btn.on { background:#f0dcc8 !important;
+  border-color:var(--sh) var(--hl) var(--hl) var(--sh) !important; }
+
+/* sunken wells: lists, inputs, chunk, graph canvas */
+.sidebar { border-right:2px solid var(--sh); }
+.cell-list, .qview, .sview, .tview, .db, .graph-detail {
+  background:var(--canvas); }
+.fi, .qtest-in, .chunk, .qr {
+  background:#fff !important; color:var(--text) !important; font-size:13px;
+  border:2px solid !important; border-color:var(--sh) var(--hl) var(--hl) var(--sh) !important; }
+.fi:focus, .qtest-in:focus { outline:1px dotted var(--text); }
+
+/* list rows + classic inverted selection */
+.ci { border-bottom:1px solid #bdbdb4; }
+.ci:hover { background:#e2e2da; }
+.ci.sel { background:#3c5a99; border-left:2px solid #16244a; padding-left:9px; }
+.ci.sel .ci-brief, .ci.sel .ci-date { color:#fff; }
+.ci-brief { color:var(--text); font-size:12px; }
+.ci-date, .smt, .qr-matched, .neigh-type, .fl, .rt { color:var(--muted); }
+
+/* badges: flat pixel tags with a hard outline */
+.sb, .tb, .trb { border:1px solid var(--text) !important; font-size:11px;
+  padding:0 5px; font-weight:normal; }
+.s-bright { background:var(--bright); color:#161611; }
+.s-high { background:#bcd8ff; color:#16244a; }
+.s-medium { background:var(--face); color:#161611; }
+.s-low { background:#dcdcd4; color:#4a4a44; }
+.t-relationship{background:#f0e0fa;color:var(--rel);} .t-work_research{background:#dde9fb;color:var(--work);}
+.t-correction{background:#fbe2da;color:var(--corr);} .t-reflection{background:#e4f4d8;color:var(--refl);}
+.t-environment_tools{background:#d8f2ee;color:var(--env);} .t-personal_mal{background:#f6ecd2;color:var(--pmal);}
+.t-personal_q{background:#fbe0ea;color:var(--pq);}
+.tr-flagged{background:#fbe0e0;color:#b8421f;} .tr-auto{background:var(--face);color:#5a5a54;}
+.tr-checked{background:#e4f4d8;color:#3c7a1a;} .tr-human{background:#d8f0d8;color:#2a6a2a;}
+
+/* cards + panels: raised faces */
+.sc, .qc, .legend, .tooltip, .toast, .dh, .filters, .qtoolbar, .neigh {
+  background:var(--face) !important; color:var(--text) !important;
+  border:2px solid !important; border-color:var(--hl) var(--sh) var(--sh) var(--hl) !important; }
+.dh, .filters, .qtoolbar { border-width:0 0 2px 0 !important; border-bottom-color:var(--sh) !important; }
+.sn { color:#16244a; } .qr-score { color:#2f6bc0; }
+.rt { border-bottom:1px solid var(--sh); }
+#graph-svg { background:var(--canvas); }
+.leg-dot { border:1px solid var(--text); }
+.empty, .semp { color:var(--muted); }
+@keyframes ants { to { stroke-dashoffset:-14; } }
+.ant-box { animation: ants .6s linear infinite; }
 </style>
 </head>
 <body>
 <header>
   <h1><img src="/favicon.svg" width="18" height="18" style="vertical-align:-3px;image-rendering:pixelated" alt="">&nbsp;Forget-me-not</h1>
   <div class="tabs">
-    <button class="tab active" data-tab="vault">Vault</button>
-    <button class="tab" data-tab="quarantine">Quarantine</button>
-    <button class="tab" data-tab="slots">Boot Slots</button>
-    <button class="tab" data-tab="graph">Graph</button>
+    <button class="tab active" data-tab="vault">Memories</button>
+    <button class="tab" data-tab="graph">Map</button>
     <button class="tab" data-tab="timeline">Timeline</button>
-    <button class="tab" data-tab="recall">Recall Test</button>
+    <button class="tab" data-tab="slots">Morning note</button>
+    <button class="tab" data-tab="recall">Try a memory</button>
+    <button class="tab" data-tab="quarantine">Waiting room</button>
   </div>
   <div id="stats">—</div>
   <button class="recall-btn" onclick="triggerRecall()">↺ Update morning note</button>
@@ -655,7 +755,7 @@ select.fi { cursor:pointer; }
       </div>
       <div class="cell-list" id="cell-list"></div>
     </div>
-    <div class="detail" id="detail"><div class="empty">Select a cell</div></div>
+    <div class="detail" id="detail"><div class="empty">Click a memory to open it</div></div>
   </div>
   <!-- QUARANTINE -->
   <div id="tab-quarantine" class="hidden" style="flex:1;overflow:hidden;flex-direction:column;">
@@ -701,7 +801,7 @@ select.fi { cursor:pointer; }
   <div id="tab-graph" class="hidden" style="flex:1;overflow:hidden;position:relative;">
     <div class="gview">
       <svg id="graph-svg"></svg>
-      <div class="graph-detail" id="graph-detail"><div class="empty">Click a node</div></div>
+      <div class="graph-detail" id="graph-detail"><div class="empty">Click a memory in the map</div></div>
     </div>
     <div class="tooltip" id="tooltip"></div>
     <div class="legend" id="legend"></div>
@@ -712,6 +812,7 @@ select.fi { cursor:pointer; }
 <script>
 let allNodes = [], allEdges = [], currentFilter = 'all', selId = null;
 let graphSim = null;
+let selectedGraphId = null;
 let qSortField = 'date', qSortDir = 'desc';
 let qCollapsed = new Set();
 
@@ -816,7 +917,7 @@ function renderList() {
 
   const list = document.getElementById('cell-list');
   if (!nodes.length) {
-    list.innerHTML = '<div style="padding:16px;color:var(--muted)">No cells match</div>';
+    list.innerHTML = '<div style="padding:16px;color:var(--muted)">No memories match</div>';
     return;
   }
   list.innerHTML = nodes.map(n => {
@@ -1083,14 +1184,16 @@ async function loadSlots() {
 }
 
 // ── D3 Graph ──────────────────────────────────────────────────────────────────
+// Saturated fills that read on the light pixel desktop, hard black outlines.
 const TYPE_COLOR = {
-  relationship:'#c792ea', work_research:'#82aaff', correction:'#f07178',
-  reflection:'#c3e88d', environment_tools:'#89ddff',
-  personal_mal:'#ffcb6b', personal_q:'#ff5370', constellation:'#ffd700',
+  relationship:'#b96fd8', work_research:'#5a8bd6', correction:'#d8663f',
+  reflection:'#6faf4a', environment_tools:'#3fae94',
+  personal_mal:'#e0a53a', personal_q:'#d67aa0', constellation:'#efc842',
 };
+const INK = '#161611';
 const EDGE_DASH = { shared_entity:'none', shared_topic:'4,3', temporal_adj:'2,2', manual:'none', co_retrieval:'none', semantic_sim:'1,3', constellation:'none' };
 const EDGE_WIDTH = { shared_entity:1.5, shared_topic:1, temporal_adj:1, manual:2.5, co_retrieval:3, semantic_sim:1.2, constellation:1.5 };
-const EDGE_COLOR = { constellation:'#ffd70066' };
+const EDGE_COLOR = { constellation:'#c98b3a' };
 
 let graphInited = false;
 
@@ -1108,30 +1211,37 @@ function initGraph() {
 
   // Rollups stay out of the physics: edge-less calendar indexes would float
   // as unexplained gray moons; the Timeline tab is their home.
+  // Stringify every id at the boundary: all-digit cell ids (e.g. 11921433)
+  // get coerced to numbers by JSON/YAML on the node while edges keep them as
+  // strings — D3's forceLink then can't resolve them and throws "missing: id"
+  // during setup, which silently kills the whole graph render. String() on
+  // both sides makes the join total.
   const graphNodes = allNodes.filter(n => n.kind !== 'rollup');
-  const nodeMap = Object.fromEntries(graphNodes.map(n => [n.cell_id, n]));
-  const nodes = graphNodes.map(n => ({...n, id: n.cell_id}));
+  const nodeMap = Object.fromEntries(graphNodes.map(n => [String(n.cell_id), n]));
+  const nodes = graphNodes.map(n => ({...n, id: String(n.cell_id)}));
   const links = allEdges
-    .filter(e => nodeMap[e.a] && nodeMap[e.b])
-    .map(e => ({...e, source: e.a, target: e.b}));
+    .filter(e => nodeMap[String(e.a)] && nodeMap[String(e.b)])
+    .map(e => ({...e, source: String(e.a), target: String(e.b)}));
 
-  // Edge lines
+  // Edge lines — black hairlines on the light desktop
   const link = g.append('g').selectAll('line').data(links).join('line')
-    .attr('stroke', d => EDGE_COLOR[d.type] || '#3a3a3a')
+    .attr('stroke', d => EDGE_COLOR[d.type] || INK)
     .attr('stroke-width', d => EDGE_WIDTH[d.type] || 1)
     .attr('stroke-dasharray', d => EDGE_DASH[d.type] || 'none')
-    .attr('stroke-opacity', 0.7);
+    .attr('stroke-opacity', d => d.type === 'semantic_sim' ? 0.35 : 0.6);
 
-  // Node markers: constellations are gold stars (the bonds); cells are circles.
+  // Node markers: square pixels with hard black outlines; constellations are
+  // gold stars (the bonds). Bright cells get a chunkier outline.
   const SIG_R = { bright:14, high:11, medium:9, low:7 };
   const isCon = d => d.kind === 'constellation';
   const node = g.append('g').selectAll('path').data(nodes).join('path')
     .attr('d', d => isCon(d)
-        ? d3.symbol().type(d3.symbolStar).size(340)()
-        : d3.symbol().type(d3.symbolCircle).size(Math.PI*Math.pow(SIG_R[d.significance]||9,2))())
-    .attr('fill', d => isCon(d) ? '#ffd700' : (TYPE_COLOR[d.semantic_type] || '#666'))
-    .attr('stroke', d => isCon(d) ? '#fff3b0' : (d.significance === 'bright' ? '#f5c842' : '#2a2a2a'))
-    .attr('stroke-width', d => isCon(d) ? 2 : (d.significance === 'bright' ? 2.5 : 1))
+        ? d3.symbol().type(d3.symbolStar).size(360)()
+        : d3.symbol().type(d3.symbolSquare).size(Math.pow((SIG_R[d.significance]||9)*1.7,2))())
+    .attr('fill', d => isCon(d) ? '#efc842' : (TYPE_COLOR[d.semantic_type] || '#8a8a80'))
+    .attr('stroke', INK)
+    .attr('stroke-width', d => d.significance === 'bright' || isCon(d) ? 2 : 1.25)
+    .attr('shape-rendering', 'crispEdges')
     .attr('cursor', 'pointer')
     .call(d3.drag()
       .on('start', (e,d) => { if (!e.active) sim.alphaTarget(0.3).restart(); d.fx=d.x; d.fy=d.y; })
@@ -1147,7 +1257,13 @@ function initGraph() {
       document.getElementById('tooltip').style.top=(e.pageY-8)+'px';
     })
     .on('mouseout', () => { document.getElementById('tooltip').style.display='none'; })
-    .on('click', (e,d) => loadGraphDetail(d.cell_id));
+    .on('click', (e,d) => { selectedGraphId = d.id; loadGraphDetail(d.cell_id); });
+
+  // Marching-ants selection box (classic pixel-GUI selection), tracks the
+  // clicked node each tick.
+  const selBox = g.append('rect').attr('class','ant-box').attr('fill','none')
+    .attr('stroke', INK).attr('stroke-width', 1.5).attr('stroke-dasharray','4 3')
+    .attr('pointer-events','none').style('display','none');
 
   // Node labels — bright + high get a name; it HUGS the node (radius-aware
   // offset set per-tick, not a fixed dy that floats loose). One-word: the
@@ -1159,8 +1275,9 @@ function initGraph() {
   const label = g.append('g').selectAll('text')
     .data(nodes.filter(n => n.kind==='constellation' || n.significance==='bright' || n.significance==='high'))
     .join('text')
-    .attr('fill', d => d.kind==='constellation' ? '#ffd700' : (d.significance==='bright' ? '#f5c842' : '#8a8a8a'))
-    .attr('font-size', d => d.kind==='constellation' ? '11px' : '9px')
+    .attr('fill', d => d.kind==='constellation' ? '#8a5a00' : INK)
+    .attr('font-size', d => d.kind==='constellation' ? '12px' : '11px')
+    .attr('font-family', "'Pixelify Sans', monospace")
     .attr('text-anchor','middle').attr('pointer-events','none')
     .text(d => d.kind==='constellation' ? ('✧ ' + (d.name||'constellation')) : shortLabel(d));
 
@@ -1189,7 +1306,15 @@ function initGraph() {
       // paths position via transform (circles used cx/cy)
       node.attr('transform', d => `translate(${d.x},${d.y})`);
       // label sits just under the node edge, tracking exactly
-      label.attr('x',d=>d.x).attr('y',d=>d.y + (isCon(d)?18:(SIG_R[d.significance]||9)) + 11);
+      label.attr('x',d=>d.x).attr('y',d=>d.y + (isCon(d)?18:(SIG_R[d.significance]||9)) + 12);
+      // marching-ants box hugs the selected node
+      const sel = nodeMap[selectedGraphId] && nodes.find(n => n.id === selectedGraphId);
+      if (sel) {
+        const r = (SIG_R[sel.significance]||9) + 6;
+        selBox.style('display',null)
+          .attr('x', sel.x - r).attr('y', sel.y - r)
+          .attr('width', r*2).attr('height', r*2);
+      } else { selBox.style('display','none'); }
     });
 
   graphSim = sim;

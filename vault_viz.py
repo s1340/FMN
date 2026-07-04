@@ -733,10 +733,10 @@ h1 { color:#fff; font-size:15px; letter-spacing:0; display:flex; align-items:cen
 <header>
   <h1><span class="appicon"><img src="/favicon.svg" width="15" height="15" style="image-rendering:pixelated;display:block" alt=""></span> Forget-me-not</h1>
   <div class="tabs">
-    <button class="tab active" data-tab="vault">Memories</button>
-    <button class="tab" data-tab="graph">Map</button>
-    <button class="tab" data-tab="timeline">Timeline</button>
+    <button class="tab active" data-tab="graph">Map</button>
     <button class="tab" data-tab="slots">Morning note</button>
+    <button class="tab" data-tab="vault">Memories</button>
+    <button class="tab" data-tab="timeline">Timeline</button>
     <button class="tab" data-tab="recall">Try a memory</button>
     <button class="tab" data-tab="quarantine">Waiting room</button>
   </div>
@@ -1232,12 +1232,22 @@ function initGraph() {
     .filter(e => nodeMap[String(e.a)] && nodeMap[String(e.b)])
     .map(e => ({...e, source: String(e.a), target: String(e.b)}));
 
-  // Edge lines — black hairlines on the light desktop
+  // Adjacency for click-to-focus. Edges are HIDDEN by default now (Mal:
+  // "disable edges, rely on grouping; on click, dim everything except the
+  // related cells"). We keep the edge data for the neighborhood lookup and a
+  // weak layout pull — the lines only light up for the focused cell.
+  const adjacency = {};
+  links.forEach(l => {
+    (adjacency[l.source] = adjacency[l.source] || new Set()).add(l.target);
+    (adjacency[l.target] = adjacency[l.target] || new Set()).add(l.source);
+  });
+
+  // Edge lines — invisible until a cell is focused (see focusNode)
   const link = g.append('g').selectAll('line').data(links).join('line')
     .attr('stroke', d => EDGE_COLOR[d.type] || INK)
     .attr('stroke-width', d => EDGE_WIDTH[d.type] || 1)
     .attr('stroke-dasharray', d => EDGE_DASH[d.type] || 'none')
-    .attr('stroke-opacity', d => d.type === 'semantic_sim' ? 0.35 : 0.6);
+    .attr('stroke-opacity', 0);
 
   // Node markers: square pixels with hard black outlines; constellations are
   // gold stars (the bonds). Bright cells get a chunkier outline.
@@ -1269,7 +1279,7 @@ function initGraph() {
       document.getElementById('tooltip').style.top=(e.pageY-8)+'px';
     })
     .on('mouseout', () => { document.getElementById('tooltip').style.display='none'; })
-    .on('click', (e,d) => { selectedGraphId = d.id; loadGraphDetail(d.cell_id); });
+    .on('click', (e,d) => { e.stopPropagation(); selectedGraphId = d.id; focusNode(d.id); loadGraphDetail(d.cell_id); });
 
   // Marching-ants selection box (classic pixel-GUI selection), tracks the
   // clicked node each tick.
@@ -1292,6 +1302,34 @@ function initGraph() {
     .attr('font-family', "'Pixelify Sans', monospace")
     .attr('text-anchor','middle').attr('pointer-events','none')
     .text(d => d.kind==='constellation' ? ('✧ ' + (d.name||'constellation')) : shortLabel(d));
+
+  // Importance marker (Mal): bright cells wear a gold ★ at the corner so you
+  // can spot what matters at a glance, not just by size.
+  const star = g.append('g').selectAll('text')
+    .data(nodes.filter(n => n.significance==='bright' && !isCon(n)))
+    .join('text')
+    .attr('text-anchor','middle').attr('pointer-events','none')
+    .attr('font-size','12px').attr('fill','#efc842').attr('stroke',INK).attr('stroke-width',0.4)
+    .text('★');
+
+  // Click-to-focus: a clicked cell keeps full opacity along with its related
+  // cells; everything unrelated dims, and only the focused cell's strings show.
+  function focusNode(id) {
+    const nb = adjacency[id] || new Set();
+    const on = d => d.id === id || nb.has(d.id);
+    node.attr('opacity', d => on(d) ? 1 : 0.12);
+    label.attr('opacity', d => on(d) ? 1 : 0.12);
+    star.attr('opacity', d => on(d) ? 1 : 0.12);
+    const touches = l => { const s = l.source.id||l.source, t = l.target.id||l.target;
+      return s === id || t === id; };
+    link.attr('stroke-opacity', l => touches(l) ? 0.5 : 0);
+  }
+  function clearFocus() {
+    node.attr('opacity', 1); label.attr('opacity', 1); star.attr('opacity', 1);
+    link.attr('stroke-opacity', 0);
+  }
+  // Clicking empty space clears the focus/selection.
+  svg.on('click', () => { selectedGraphId = null; clearFocus(); selBox.style('display','none'); });
 
   // Density-adaptive layout (survives vault growth — tuned once, scales).
   // The clump failure at 101 nodes: 149 weak semantic springs pulled everyone
@@ -1355,6 +1393,7 @@ function initGraph() {
       node.attr('transform', d => `translate(${d.x},${d.y})`);
       // label sits just under the node edge, tracking exactly
       label.attr('x',d=>d.x).attr('y',d=>d.y + (isCon(d)?18:(SIG_R[d.significance]||9)) + 12);
+      star.attr('x',d=>d.x + (SIG_R[d.significance]||9) + 3).attr('y',d=>d.y - (SIG_R[d.significance]||9) + 2);
       // marching-ants box hugs the selected node
       const sel = nodeMap[selectedGraphId] && nodes.find(n => n.id === selectedGraphId);
       if (sel) {
@@ -1375,12 +1414,12 @@ function initGraph() {
 
 function renderLegend() {
   const types = Object.entries(TYPE_COLOR);
-  const edgeTypes = [['shared_entity','solid'],['shared_topic','dashed'],['manual','thick']];
   document.getElementById('legend').innerHTML =
     '<div style="color:var(--muted);font-size:10px;margin-bottom:6px;text-transform:uppercase;letter-spacing:.05em">Types</div>' +
     types.map(([t,c])=>`<div class="legend-row"><span class="leg-dot" style="background:${c}"></span><span>${t.replace('_',' ')}</span></div>`).join('') +
-    '<div style="color:var(--muted);font-size:10px;margin:8px 0 6px;text-transform:uppercase;letter-spacing:.05em">Edges</div>' +
-    edgeTypes.map(([t,s])=>`<div class="legend-row"><span class="leg-line" style="background:#666;opacity:.7;${s==='dashed'?'background:repeating-linear-gradient(90deg,#666 0,#666 4px,transparent 4px,transparent 7px)':''}${s==='thick'?'height:3px':''}"></span><span>${t.replace('_',' ')}</span></div>`).join('');
+    '<div style="color:var(--muted);font-size:10px;margin:8px 0 6px;text-transform:uppercase;letter-spacing:.05em">Importance</div>' +
+    '<div class="legend-row"><span style="color:#efc842;font-size:12px;width:10px;text-align:center">★</span><span>bright · bigger square = more important</span></div>' +
+    '<div style="color:var(--muted);font-size:10px;margin-top:8px;line-height:1.4">Click a cell to light up what it connects to.</div>';
 }
 
 async function loadGraphDetail(cellId) {
@@ -1414,6 +1453,7 @@ async function loadGraphDetail(cellId) {
         <button class="mute-btn${muted?' on':''}" onclick="toggleMuteG('${cell.cell_id}',${!muted})">🔇 mute</button>
         <button class="linkb" onclick="startLink('${cell.cell_id}')">＋ link →</button>
         <button class="linkb" onclick="toggleChunk('${cell.cell_id}')">👁 chunk</button>
+        <button class="linkb" onclick="openFullEdit('${cell.cell_id}')">✎ full view / edit</button>
       </div>
       <div class="chunk" id="gchunk-${cell.cell_id}" style="display:none;margin-top:10px;max-height:240px;">${esc(cell.chunk||'(not loaded)')}</div>
     </div>
@@ -1435,10 +1475,8 @@ async function toggleMuteG(id,on){ if(await curate({action:'mute',cell_id:id,on}
 async function severEdgeG(a,b,type){ if(await curate({action:'sever',a,b,type})){toast('String severed');await refreshGraph();loadGraphDetail(a);} }
 
 // ── Tabs ──────────────────────────────────────────────────────────────────────
-document.querySelectorAll('.tab').forEach(tab => tab.addEventListener('click', () => {
-  document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
-  tab.classList.add('active');
-  const id = tab.dataset.tab;
+function switchTab(id) {
+  document.querySelectorAll('.tab').forEach(t => t.classList.toggle('active', t.dataset.tab === id));
   ['vault','quarantine','slots','graph','timeline','recall'].forEach(t => {
     const el = document.getElementById('tab-'+t);
     el.classList.toggle('hidden', t !== id);
@@ -1449,7 +1487,12 @@ document.querySelectorAll('.tab').forEach(tab => tab.addEventListener('click', (
   if (id === 'graph') { el_graph_fix(); }
   if (id === 'timeline') loadTimeline();
   if (id === 'recall') setTimeout(() => document.getElementById('qtest').focus(), 50);
-}));
+}
+document.querySelectorAll('.tab').forEach(tab =>
+  tab.addEventListener('click', () => switchTab(tab.dataset.tab)));
+
+// Jump from the Map's detail panel into the full editor on the Memories tab.
+function openFullEdit(id) { switchTab('vault'); selCell(id); }
 
 async function runQTest() {
   const q = document.getElementById('qtest').value.trim();
@@ -1534,7 +1577,8 @@ function toast(msg, isError=false) {
   setTimeout(() => t.classList.remove('show'), isError ? 5000 : 2500);
 }
 
-init();
+// Land on the Map (the main dish) once the data has loaded.
+init().then(() => switchTab('graph'));
 </script>
 </body>
 </html>"""

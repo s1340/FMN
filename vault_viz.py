@@ -648,8 +648,13 @@ body { background:var(--face); color:var(--text);
 body { border:2px solid; border-color:var(--hl) #4a4a44 #4a4a44 var(--hl); }
 header { background:var(--accent); color:#fff; border-bottom:2px solid #5f7bb0;
   padding:6px 10px; }
-h1 { color:#fff; font-size:15px; letter-spacing:0; }
-#stats { color:#eef; font-size:12px; }
+h1 { color:#fff; font-size:15px; letter-spacing:0; display:flex; align-items:center; gap:5px; }
+.appicon { display:inline-flex; align-items:center; justify-content:center;
+  width:21px; height:21px; background:#f4f4ee; flex-shrink:0;
+  border:2px solid; border-color:#fff #5f7bb0 #5f7bb0 #fff; }
+/* status readout: a sunken light well so its red/green state reads on blue */
+#stats { background:#eef1f8 !important; color:#161611 !important; font-size:12px;
+  border:2px solid; border-color:#5f7bb0 #fff #fff #5f7bb0; padding:3px 9px; }
 
 /* tabs: raised chips, active one pressed-in + highlighted */
 .tab, .fb { background:var(--face); color:var(--text); font-size:12px;
@@ -722,7 +727,7 @@ h1 { color:#fff; font-size:15px; letter-spacing:0; }
 </head>
 <body>
 <header>
-  <h1><img src="/favicon.svg" width="18" height="18" style="vertical-align:-3px;image-rendering:pixelated" alt="">&nbsp;Forget-me-not</h1>
+  <h1><span class="appicon"><img src="/favicon.svg" width="15" height="15" style="image-rendering:pixelated;display:block" alt=""></span> Forget-me-not</h1>
   <div class="tabs">
     <button class="tab active" data-tab="vault">Memories</button>
     <button class="tab" data-tab="graph">Map</button>
@@ -838,14 +843,14 @@ async function init() {
     const el = document.getElementById('integ');
     if (!iv.available) { el.textContent = ''; }
     else if (iv.drifted.length) {
-      el.innerHTML = `<span style="color:#ff6b6b;font-weight:bold">⚠ ${iv.drifted.length} DRIFTED</span>`;
+      el.innerHTML = `<span style="color:#b02020;font-weight:bold">⚠ ${iv.drifted.length} DRIFTED</span>`;
       el.title = 'Cells edited outside the system: ' + iv.drifted.join(', ');
     } else {
       const sig = iv.signatures || {};
       const sigStr = !sig.active ? ''
-        : sig.ok ? ' · <span style="color:#4caf50" title="Ed25519 seal-event log intact">✓ signed</span>'
-        : ` · <span style="color:#ff6b6b;font-weight:bold" title="${(sig.detail||'').replace(/"/g,'')}">⚠ SIGNATURE</span>`;
-      el.innerHTML = `<span style="color:#4caf50">✓ ${iv.intact} sealed</span>` + sigStr;
+        : sig.ok ? ' · <span style="color:#2a7a2a" title="Ed25519 seal-event log intact">✓ signed</span>'
+        : ` · <span style="color:#b02020;font-weight:bold" title="${(sig.detail||'').replace(/"/g,'')}">⚠ SIGNATURE</span>`;
+      el.innerHTML = `<span style="color:#2a7a2a">✓ ${iv.intact} sealed</span>` + sigStr;
     }
   } catch(e) {}
 }

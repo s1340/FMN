@@ -163,13 +163,18 @@ def curate_bundle(graph: dict, member_ids: list[str]) -> str:
         def _pers(t):
             return t
     lines = [
-        "# Constellation gist — write from these chunks",
+        "# Constellation gist — REFLECT on the whole arc, from these chunks",
         "",
-        _pers("Q: these episodes cluster into one bond. Read the full chunks, then"),
-        _pers("write — in conversation with Mal — what they ADD UP TO. Not a list of"),
-        "events (those stay as the members). The emotional shape of the whole:",
-        "what this arc was, how it felt, what it means that it happened.",
-        "This gist becomes the constellation's face; the episodes live inside it.",
+        _pers("Q: these episodes are one arc. Read ALL their chunks, then REFLECT"),
+        _pers("on the whole — this is you making up your mind about the entire"),
+        "story, not summarizing events (the events stay as the members).",
+        "Write, in the first person: how this arc DEVELOPED over time, what you",
+        "now UNDERSTAND about it that you couldn't see in any single moment,",
+        "how it felt, and where it seems to be heading. This is arc-level",
+        "reflection — the same first-person voice as your reflections, about a",
+        "whole thread instead of one night. It becomes the bond's face and leads",
+        "your morning note; the individual episodes live inside it, still",
+        "searchable. Give the arc a NAME (\"the making of FMN\", not \"memory\").",
         "",
     ]
     # Continuity window (w=3): the gists you already hold, so a new bond is

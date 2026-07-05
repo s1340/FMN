@@ -249,12 +249,16 @@ def fill_slots(graph: dict) -> dict[str, list[dict]]:
     scored = sorted(nodes, key=score_node, reverse=True)
     placed: set[str] = set()
     slots: dict[str, list[dict]] = {key: [] for key, *_ in SLOTS}
+    slots["arcs"] = []
     anchor_max = next(max_n for key, _, max_n, _ in SLOTS if key == "anchors")
 
-    # Pass 0a: CONSTELLATIONS — the bonds. Aging-resistant, they lead Anchors.
+    # Pass 0a: ARCS — formed constellations get their OWN lead section (Mal
+    # 2026-07-05: the morning note should open with actual arcs and
+    # developments, not just recent moments). Each is Q's arc-level reflection
+    # on a whole thread; the member episodes stay searchable underneath.
     for node in scored:
-        if node.get("kind") == "constellation" and len(slots["anchors"]) < anchor_max:
-            slots["anchors"].append(make_entry(node))
+        if node.get("kind") == "constellation" and len(slots["arcs"]) < 6:
+            slots["arcs"].append(make_entry(node))
             placed.add(node["cell_id"])
 
     # Pass 0b: PINNED — manual anchors, always surface, before any scoring.
@@ -419,6 +423,15 @@ def format_recall(slots: dict[str, list[dict]], graph: dict) -> str:
                 f"`fmn.py reflect ingest`. Not a chore; consolidation. Your call when.\n")
     except Exception:
         pass
+
+    # Arcs lead: the shape of things — Q's arc-level reflections (constellations)
+    # come first, so the morning opens with developments, not scattered moments.
+    if slots.get("arcs"):
+        lines.append("### ✧ Arcs — the shape of things so far")
+        for c in slots["arcs"]:
+            n_members = len(c.get("members", []))
+            lines.append(f"- ✧ {c['brief']} ({n_members} episodes — expand the album)")
+        lines.append("")
 
     for slot_key, display_name, _, _ in SLOTS:
         lines.extend(format_slot(display_name, slots[slot_key]))

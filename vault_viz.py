@@ -1256,11 +1256,10 @@ function initGraph() {
   const node = g.append('g').selectAll('path').data(nodes).join('path')
     .attr('d', d => isCon(d)
         ? d3.symbol().type(d3.symbolStar).size(360)()
-        : d3.symbol().type(d3.symbolSquare).size(Math.pow((SIG_R[d.significance]||9)*1.7,2))())
+        : d3.symbol().type(d3.symbolCircle).size(Math.pow((SIG_R[d.significance]||9)*1.7,2))())
     .attr('fill', d => isCon(d) ? '#efc842' : (TYPE_COLOR[d.semantic_type] || '#8a8a80'))
     .attr('stroke', INK)
     .attr('stroke-width', d => d.significance === 'bright' || isCon(d) ? 2 : 1.25)
-    .attr('shape-rendering', 'crispEdges')
     .attr('cursor', 'pointer')
     .call(d3.drag()
       // Drag moves ONLY the grabbed cell. Once the board has settled every

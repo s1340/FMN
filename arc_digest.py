@@ -230,6 +230,19 @@ def chronicles_due(graph: dict) -> list[str]:
                 if st:
                     types.setdefault(st, []).append(n)
                     break
+    # (Almost) every substantial TYPE deserves a chronicle even before any
+    # bond is formed there (Mal): >=12 cells or >=3 bright qualifies.
+    counts, brights = {}, {}
+    for n in graph["nodes"].values():
+        if n.get("kind") in ("constellation", "rollup"):
+            continue
+        st = str(n.get("semantic_type", ""))
+        counts[st] = counts.get(st, 0) + 1
+        if n.get("significance") == "bright":
+            brights[st] = brights.get(st, 0) + 1
+    for st in counts:
+        if st and st not in types and (counts[st] >= 12 or brights.get(st, 0) >= 3):
+            types[st] = []
     due = []
     for st, bonds in types.items():
         cp = chronicle_path(st)
@@ -247,8 +260,6 @@ def chronicles_due(graph: dict) -> list[str]:
 
 def chronicle_curate(graph: dict, stype: str) -> None:
     bonds = _type_bonds(graph, stype)
-    if not bonds:
-        sys.exit(f"no formed bonds in type {stype!r} yet")
     lines = [f"# Chronicle — the whole of \"{stype}\" — read, then write SHORT",
              "",
              "Q: this is the apex layer. Write the overall arc of EVERYTHING",
@@ -264,6 +275,23 @@ def chronicle_curate(graph: dict, stype: str) -> None:
     if cp.exists():
         lines += ["## Your current chronicle (update it)",
                   cp.read_text(encoding="utf-8"), ""]
+    if not bonds:
+        # No bonds formed here yet — chronicle from the type's brightest
+        # briefs/episodes (navigation layer; the chronicle stays a SHAPE).
+        cells = sorted((n for n in graph["nodes"].values()
+                        if str(n.get("semantic_type", "")) == stype
+                        and n.get("kind") not in ("constellation", "rollup")),
+                       key=lambda n: (n.get("significance") != "bright",
+                                      str(n.get("session_date", ""))))
+        lines.append(f"## The type's notable moments (no bonds formed yet)")
+        budget = 30_000
+        for n in cells:
+            entry = f"- {n.get('session_date','')}: {n.get('episode') or n.get('brief','')}"
+            if len(entry) > budget:
+                break
+            lines.append(entry)
+            budget -= len(entry)
+        lines.append("")
     for b in bonds:
         lines += [f"## ✧ {b.get('name', b['cell_id'])} — your gist",
                   str(b.get("episode") or b.get("brief") or ""), ""]

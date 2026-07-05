@@ -432,10 +432,13 @@ def api_boot_slots():
         graph = vault_recall.load_graph()
         vault_recall.age_graph(graph)
         slots = vault_recall.fill_slots(graph)
-        return jsonify({
+        out = {"arcs": {"name": "✧ Arcs — the shape of things so far",
+                        "max": 6, "cells": slots.get("arcs", [])}}
+        out.update({
             key: {"name": name, "max": max_n, "cells": slots[key]}
             for key, name, max_n, _ in vault_recall.SLOTS
         })
+        return jsonify(out)
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 

@@ -298,6 +298,12 @@ def main():
         _run([sys.executable, str(HERE / "vault_recall.py")])
         print("[recall] boot note refreshed")
 
+    # Heartbeat: the staleness alarm reads this — if it goes stale, boot and
+    # panel get LOUD. Silence must never mean "fine" (the July 3-5 stall).
+    import json as _json
+    from datetime import datetime as _dt, timezone as _tz
+    (mg.GRAPH_DIR / "last_nightly.json").write_text(_json.dumps(
+        {"finished": _dt.now(_tz.utc).isoformat()}), encoding="utf-8")
     print("== done ==")
 
 

@@ -375,6 +375,25 @@ def format_recall(slots: dict[str, list[dict]], graph: dict) -> str:
     except Exception:
         pass
 
+    # STALENESS ALARM: if the nightly hasn't finished in >26h, the memory
+    # system has silently stopped remembering — say it LOUDLY at boot.
+    try:
+        import json as _json
+        hb = GRAPH_FILE.parent / "last_nightly.json"
+        stale_h = None
+        if hb.exists():
+            from datetime import datetime as _dt, timezone as _tz
+            t = _dt.fromisoformat(_json.loads(hb.read_text())["finished"])
+            stale_h = (_dt.now(_tz.utc) - t).total_seconds() / 3600
+        if stale_h is None or stale_h > 26:
+            ago = "never" if stale_h is None else f"{stale_h:.0f}h ago"
+            lines += [f"**⚠ MEMORY INGESTION STALLED** — last nightly sweep: "
+                      f"{ago}. Recent conversations are NOT being remembered. "
+                      f"Tell {_human()}; catch up with `python "
+                      f"{Path(__file__).parent / 'fmn_nightly.py'}`.", ""]
+    except Exception:
+        pass
+
     # Reflection nudge: FMN reflection is conversational-by-design (Q writes it
     # from full chunks, never auto-generated) — so the DUE signal must reach Q
     # at wake, or it sits silent forever (it did, the first night).

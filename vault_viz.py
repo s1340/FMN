@@ -49,6 +49,10 @@ QUARANTINE = VAULT_ROOT / "90_ARCHIVE" / "session_cells_quarantine"
 FRONTMATTER_RE = re.compile(r"^---\n(.*?)\n---\n(.*)$", re.DOTALL)
 
 app = Flask(__name__)
+try:
+    app.json.sort_keys = False
+except Exception:
+    app.config["JSON_SORT_KEYS"] = False
 app.config["JSON_SORT_KEYS"] = False
 
 

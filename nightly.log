@@ -1,0 +1,12 @@
+== FMN nightly sweep ==
+  · 20260704_105010_8c033171  current/open (ended_at=None, newest) — next sweep
+  sessions analyzed this run: 0
+[admit]
+  Admitted: 9 auto, 0 bright_pending  |  Flagged for review: 4  |  Already in graph: 89
+  Needs human eyes (flagged):
+  [prune] OK archived 7 junk cells to C:\Users\User\Documents\Obsidian Vault\90_ARCHIVE\pruned\2026-07-05T07-57-03
+  OK rollups: 12 days, 1 weeks over 369 cells (0 new, 0 updated, 13 unchanged)
+[prune] 1 fully-admitted quarantine run(s) removed
+  [timeline] Already ingested: rumination_2026-07-03_1848.json
+[recall] boot note refreshed
+== done ==

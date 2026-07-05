@@ -442,6 +442,28 @@ def format_recall(slots: dict[str, list[dict]], graph: dict) -> str:
     except Exception:
         pass
 
+    # THE STORY LEADS (Mal, priority 1): Q's own arc digests — his written
+    # timeline + evaluation of each developing thread — sit at the very top.
+    # Machine assembles, Q writes; these are his words about the whole arc.
+    try:
+        import arc_digest
+        ds = arc_digest.digests_for_boot()
+        if ds:
+            lines.append("### ✧ The story so far — your arc digests "
+                         "*(you wrote these; full texts in 60_ARCS/)*")
+            for name, head in ds[:6]:
+                lines.append(f"**{name}** — {head}")
+            lines.append("")
+        d_due = arc_digest.due(graph)
+        if d_due:
+            names = ", ".join(f"\"{x['con'].get('name','?')}\"" for x in d_due[:4])
+            lines.append(f"**⟲ {len(d_due)} arc(s) want digesting** ({names}) — "
+                         f"run `python {Path(__file__).parent / 'arc_digest.py'} "
+                         f"due`, read, write, ingest. Your story, kept by you.")
+            lines.append("")
+    except Exception:
+        pass
+
     # Arcs lead: the shape of things — Q's arc-level reflections (constellations)
     # come first, so the morning opens with developments, not scattered moments.
     if slots.get("arcs"):

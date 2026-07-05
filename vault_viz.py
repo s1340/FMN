@@ -516,6 +516,8 @@ def api_archive_list():
                     c = parse_cell_file(f)
                     cid = str(c["frontmatter"].get("cell_id", f.stem))
                     out.append({"cell_id": cid, "brief": c["brief"][:220],
+                                "significance": str(c["frontmatter"].get("significance", "medium")),
+                                "semantic_type": str(c["frontmatter"].get("semantic_type", "work_research")),
                                 "date": str(c["frontmatter"].get("session_date", "")),
                                 "reason": reasons.get(cid, run.parent.name if run.parent.name.startswith("95_") else run.name),
                                 "path": str(f)})
@@ -939,6 +941,24 @@ h1 { color:#fff; font-size:15px; letter-spacing:0; display:flex; align-items:cen
       <div style="font-size:11px;color:var(--muted);margin-bottom:10px;">
         Nothing is ever deleted. Everything archived lives here — misclicked?
         Restore brings it back, re-sealed and searchable.</div>
+      <div class="qtest-box" style="margin-bottom:8px">
+        <input class="qtest-in" id="arch-search" placeholder="search the archive…"
+          oninput="renderArchive()">
+      </div>
+      <div class="filters" style="border:none;padding:4px 0;margin-bottom:8px" id="arch-filters">
+        <button class="fb on" data-af="all">all</button>
+        <button class="fb" data-af="reason:tool-call bloat">tool bloat</button>
+        <button class="fb" data-af="reason:trivial">trivial</button>
+        <button class="fb" data-af="reason:faded">faded</button>
+        <button class="fb" data-af="reason:manual">manual</button>
+        <button class="fb" data-af="reason:genesis">old vault (genesis)</button>
+        <button class="fb" data-af="type:relationship">relation</button>
+        <button class="fb" data-af="type:work_research">work</button>
+        <button class="fb" data-af="type:personal_q">personal Q</button>
+        <button class="fb" data-af="type:personal_mal">personal Mal</button>
+        <button class="fb" data-af="sig:low">· low</button>
+        <button class="fb" data-af="sig:medium">• medium</button>
+      </div>
       <div id="archive-list"><div class="empty">loading…</div></div>
     </div>
   </div>
@@ -1712,18 +1732,45 @@ async function archiveCell(id) {
   selId = null; document.getElementById('detail').innerHTML = '<div class="empty">Click a memory to open it</div>';
   await init();
 }
+let archCells = [], archFilter = 'all';
 async function loadArchive() {
   const box = document.getElementById('archive-list');
   box.innerHTML = '<div class="empty">loading…</div>';
   const d = await (await fetch('/api/archive')).json();
-  const cs = d.cells || [];
-  if (!cs.length) { box.innerHTML = '<div class="empty">Archive is empty.</div>'; return; }
-  box.innerHTML = cs.map(c => `<div class="qc">
-    <div style="font-size:12px;margin-bottom:4px">${esc(c.brief)}</div>
+  archCells = d.cells || [];
+  renderArchive();
+}
+function renderArchive() {
+  const box = document.getElementById('archive-list');
+  const q = (document.getElementById('arch-search').value || '').toLowerCase();
+  let cs = archCells;
+  if (archFilter !== 'all') {
+    const [kind, val] = archFilter.split(':');
+    cs = cs.filter(c =>
+      kind === 'reason' ? (c.reason || '').toLowerCase().includes(val)
+      : kind === 'type' ? c.semantic_type === val
+      : c.significance === val);
+  }
+  if (q) cs = cs.filter(c =>
+    (c.brief || '').toLowerCase().includes(q)
+    || (c.reason || '').toLowerCase().includes(q)
+    || (c.cell_id || '').includes(q) || (c.date || '').includes(q));
+  if (!cs.length) { box.innerHTML = '<div class="empty">Nothing matches.</div>'; return; }
+  box.innerHTML = `<div style="font-size:11px;color:var(--muted);margin-bottom:6px">${cs.length} of ${archCells.length}</div>`
+    + cs.map(c => `<div class="qc">
+    <div class="ci-meta"><span class="sb s-${c.significance||'medium'}">${c.significance||''}</span>
+      <span class="tb t-${c.semantic_type||'work_research'}">${(c.semantic_type||'').replace('_',' ')}</span></div>
+    <div style="font-size:12px;margin:4px 0">${esc(c.brief)}</div>
     <div style="font-size:11px;color:var(--muted);margin-bottom:6px">${c.cell_id} · ${c.date} · archived: ${esc(c.reason||'?')}</div>
     <button class="appr" onclick="restoreCell('${encodeURIComponent(c.path)}')">↩ restore</button>
   </div>`).join('');
 }
+document.addEventListener('click', e => {
+  const b = e.target.closest('#arch-filters .fb'); if (!b) return;
+  document.querySelectorAll('#arch-filters .fb').forEach(x => x.classList.remove('on'));
+  b.classList.add('on'); archFilter = b.dataset.af; renderArchive();
+});
+
 async function restoreCell(encPath) {
   const r = await fetch('/api/archive/restore', {method:'POST',
     headers:{'Content-Type':'application/json'},

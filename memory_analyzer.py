@@ -361,7 +361,7 @@ def _llm_call_with_retry(system: str, user: str, label: str,
         f"[{label}] failed after {1 + retries} attempts", "", 0) from last_err
 
 
-def absorb_tiny_boundaries(boundaries: list[dict], min_msgs: int = 3) -> list[dict]:
+def absorb_tiny_boundaries(boundaries: list[dict], min_msgs: int = 4) -> list[dict]:
     """Deterministic guard behind the story pass: a scene under min_msgs is a
     beat, not a scene — absorb it into a neighbor instead of orphaning it as
     its own cell ('USER: Mine / ASSISTANT: Yeah. Yours.'). Preference order:

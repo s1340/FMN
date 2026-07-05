@@ -453,6 +453,43 @@ def api_trigger_recall():
     })
 
 
+@app.route("/api/cell/<cell_id>/unflag", methods=["POST"])
+def api_unflag(cell_id):
+    """Mal's hand: a flagged cell she verified is human-trusted again."""
+    with locked_graph() as g:
+        n = g["nodes"].get(cell_id)
+        if not n:
+            return jsonify({"ok": False, "error": "no such cell"}), 404
+        n["trust"] = "human"
+    return jsonify({"ok": True})
+
+
+@app.route("/api/cell/<cell_id>/archive", methods=["POST"])
+def api_archive(cell_id):
+    """Archive one cell to 90_ARCHIVE/pruned (reversible, never deleted)."""
+    import shutil
+    from datetime import datetime, timezone
+    dest = VAULT_ROOT / "90_ARCHIVE" / "pruned" /         datetime.now(timezone.utc).strftime("%Y-%m-%dT%H-%M-%S_manual")
+    dest.mkdir(parents=True, exist_ok=True)
+    with locked_graph() as g:
+        n = g["nodes"].pop(cell_id, None)
+        if not n:
+            return jsonify({"ok": False, "error": "no such cell"}), 404
+        p = Path(n.get("file", ""))
+        if p.exists():
+            shutil.move(str(p), str(dest / p.name))
+        g["edges"] = [e for e in g["edges"]
+                      if e["a"] != cell_id and e["b"] != cell_id]
+    try:
+        import memory_embed
+        store = memory_embed.load_store()
+        store.pop(cell_id, None)
+        memory_embed.save_store(store)
+    except Exception:
+        pass
+    return jsonify({"ok": True})
+
+
 @app.route("/favicon.svg")
 def favicon():
     """The forget-me-not mark (assets/fmn-mark.svg), embedded so the panel is
@@ -878,7 +915,7 @@ async function loadTimeline() {
       const fb = facts.find(f => f.id === c.fact_b) || {};
       html += `<div style="border:1px solid #ff9800;border-radius:4px;padding:8px;margin-bottom:8px;font-size:12px">
         <div style="color:var(--muted);margin-bottom:4px">${c.explanation||''}</div>
-        <div><b>a</b> (${c.fact_a_cell||'?'}): "${(fa.statement||'').slice(0,140)}"</div>
+        <div><b>a</b> (${c.fact_a_cell||'?'}): "${(fa.statement||'').slice(0,220)}"</div>
         <div><b>b</b> (${c.fact_b_cell||'?'}): "${(fb.statement||'').slice(0,140)}"</div>
         <div style="margin-top:6px">${['a','b','both','neither'].map(k =>
           `<button class="tab" style="margin-right:4px" onclick="resolveConflict('${c.id}','${k}')">keep ${k}</button>`).join('')}
@@ -976,6 +1013,10 @@ async function selCell(id) {
         onclick="togglePin('${cell.cell_id}',${!pinned})">📌 pin</button>
       <button class="mute-btn${muted?' on':''}" title="never at boot, still searchable"
         onclick="toggleMute('${cell.cell_id}',${!muted})">🔇 mute</button>
+      <button class="mute-btn" title="clear the flag — you checked it, it's fine"
+        onclick="unflagCell('${cell.cell_id}')">⚑ unflag</button>
+      <button class="mute-btn" style="border-color:#5a3a3a !important" title="archive this memory (reversible)"
+        onclick="archiveCell('${cell.cell_id}')">🗑 archive</button>
       <button class="save-btn" onclick="saveCell('${cell.cell_id}')">Save</button>
     </div>
     <div class="db">
@@ -1430,7 +1471,7 @@ async function loadGraphDetail(cellId) {
     return `<div class="neigh-item">
       <div class="neigh-type">${e.type} · w=${(e.weight||1).toFixed?(e.weight||1).toFixed(2):e.weight}
         <button class="cutb" title="sever (permanent)" onclick="severEdgeG('${cellId}','${oid}','${e.type}')">✂</button></div>
-      <div class="neigh-brief" onclick="loadGraphDetail('${oid}')">${esc((o.brief||'').slice(0,90))}</div>
+      <div class="neigh-brief" onclick="loadGraphDetail('${oid}')">${esc((o.brief||'').slice(0,220))}</div>
     </div>`;
   }).join('');
   const pinned = cell.pinned, muted = cell.muted;
@@ -1559,6 +1600,18 @@ let _liveTimer = setInterval(async () => {
   } catch(e) {}
 }, 8000);
 
+async function unflagCell(id) {
+  const r = await fetch('/api/cell/'+id+'/unflag', {method:'POST'});
+  toast((await r.json()).ok ? 'Unflagged — trusted (you checked it)' : 'failed');
+  await init(); selCell(id);
+}
+async function archiveCell(id) {
+  if (!confirm('Archive this memory? It leaves the vault but the file is kept (reversible).')) return;
+  const r = await fetch('/api/cell/'+id+'/archive', {method:'POST'});
+  toast((await r.json()).ok ? 'Archived' : 'failed');
+  selId = null; document.getElementById('detail').innerHTML = '<div class="empty">Click a memory to open it</div>';
+  await init();
+}
 function esc(s) { return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
 function toast(msg, isError=false) {
   const t = document.getElementById('toast');

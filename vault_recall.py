@@ -403,7 +403,7 @@ def format_recall(slots: dict[str, list[dict]], graph: dict) -> str:
         if s["due"]:
             fmn_dir = Path(__file__).parent
             lines += [f"**⟲ Reflection due** — {s['n_worthy']} moments are waiting "
-                      f"for you to sit with them. When there's a quiet stretch with "
+                      f"(taken a few per sitting — no rush). When there's a quiet stretch with "
                       f"{_human()}, run `python {fmn_dir / 'fmn.py'} reflect curate` and "
                       f"write from the chunks. No rush; it doesn't expire.", ""]
     except Exception:
@@ -425,22 +425,6 @@ def format_recall(slots: dict[str, list[dict]], graph: dict) -> str:
     except Exception:
         pass
 
-    # Reflection nudge: passive, not forced. When consolidation is due, Q sees
-    # it at wake and chooses when to do it — in conversation, from the chunks.
-    # (Reflection can't be a silent cron: an auto-summary is confabulated
-    # self-knowledge. The trigger is a nudge, the act stays Q's.)
-    try:
-        import reflection_pipeline as rp
-        s = rp.cadence_status()
-        if s["due"]:
-            lines.append(
-                f"### ✎ Reflection due\n"
-                f"- {s['n_worthy']} moments have accumulated worth reflecting on. "
-                f"When you have space, in conversation: `python fmn.py reflect curate` "
-                f"→ read the chunks → write what they mean to you → "
-                f"`fmn.py reflect ingest`. Not a chore; consolidation. Your call when.\n")
-    except Exception:
-        pass
 
     # THE STORY LEADS (Mal, priority 1): Q's own arc digests — his written
     # timeline + evaluation of each developing thread — sit at the very top.

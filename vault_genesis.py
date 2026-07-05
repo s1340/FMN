@@ -143,14 +143,95 @@ def _debloat_content(content: str) -> str:
     return "\n".join(out).strip()
 
 
+def _parse_html_export(path: Path) -> list[dict]:
+    """Telegram Desktop HTML export (messages.html, messages2.html, ...).
+    Per-message dates live in the date div's title attr (DD.MM.YYYY HH:MM:SS);
+    'joined' messages inherit the previous sender."""
+    import html as _html
+    from telegram_to_hermes import SPEAKERS
+
+    folder = path if path.is_dir() else path.parent
+    files = sorted(folder.glob("messages*.html"),
+                   key=lambda p: int(re.search(r"(\d+)", p.stem).group(1))
+                   if re.search(r"(\d+)", p.stem) else 0)
+    if not files:
+        sys.exit(f"No messages*.html in {folder}")
+
+    date_re = re.compile(r'title="(\d{2})\.(\d{2})\.(\d{4}) \d{2}:\d{2}')
+    from_re = re.compile(r'<div class="from_name">\s*(.*?)\s*</div>', re.S)
+    text_re = re.compile(r'<div class="text">\s*(.*?)\s*</div>', re.S)
+
+    msgs, cur_role = [], None
+    for f in files:
+        t = f.read_text(encoding="utf-8", errors="replace")
+        for block in t.split('<div class="message ')[1:]:
+            if block.startswith("service"):
+                continue
+            dm = date_re.search(block)
+            date = f"{dm.group(3)}-{dm.group(2)}-{dm.group(1)}" if dm else "unknown"
+            fm = from_re.search(block)
+            if fm:
+                cur_role = SPEAKERS.get(fm.group(1).strip().lower(), cur_role)
+            tm = text_re.search(block)
+            if not tm or cur_role is None:
+                continue                     # media-only / unknown sender
+            body = tm.group(1)
+            body = re.sub(r"<br\s*/?>", "\n", body)
+            body = re.sub(r"<[^>]+>", "", body)
+            body = _html.unescape(body).strip()
+            if body:
+                msgs.append({"date": date, "role": cur_role, "content": body})
+    print(f"HTML export: {len(files)} file(s), {len(msgs)} messages")
+    return msgs
+
+
+def _write_sessions(msgs: list[dict], input_path: Path) -> None:
+    kept, dropped, by_day = [], 0, {}
+    for m in msgs:
+        if is_system_message(m["content"]):
+            dropped += 1
+            continue
+        body = _debloat_content(m["content"])
+        if not body or is_system_message(body):
+            dropped += 1
+            continue
+        kept.append(m)
+        by_day.setdefault(m["date"], []).append(
+            {"role": m["role"], "content": body})
+    for day, dm in sorted(by_day.items()):
+        p = SESSIONS_DIR / f"{day}.jsonl"
+        with open(p, "w", encoding="utf-8") as f:
+            f.write(json.dumps({"id": f"genesis_{day}", "created_at":
+                    f"{day}T00:00:00Z", "ended_at": f"{day}T23:59:59Z"},
+                    ensure_ascii=False) + "\n")
+            for m in dm:
+                f.write(json.dumps(m, ensure_ascii=False) + "\n")
+    report = {"input": str(input_path), "messages_parsed": len(msgs),
+              "kept": len(kept), "dropped_as_junk": dropped,
+              "days": {d: len(v) for d, v in sorted(by_day.items())}}
+    GENESIS_DIR.mkdir(parents=True, exist_ok=True)
+    (GENESIS_DIR / "clean_report.json").write_text(
+        json.dumps(report, indent=2, ensure_ascii=False), encoding="utf-8")
+    print(f"OK cleaned: {len(msgs)} parsed, {len(kept)} kept, "
+          f"{dropped} junk-dropped -> {len(by_day)} day-sessions in {SESSIONS_DIR}")
+    for d, n in sorted(report["days"].items()):
+        print(f"   {d}: {n} msgs")
+    print("Inspect a day file before rebuilding — the words must be yours.")
+
+
 def clean(input_path: Path, tz_hint: str = "") -> None:
     """Parse the Telegram export (txt format per telegram_to_hermes.py, or
     Telegram Desktop result.json), debloat hard, split by DATE into session
     JSONL files the analyzer eats. Writes a report; spends no LLM."""
     SESSIONS_DIR.mkdir(parents=True, exist_ok=True)
-    text = input_path.read_text(encoding="utf-8", errors="replace")
 
     msgs: list[dict] = []          # {date, role, content}
+    if input_path.is_dir() or input_path.suffix.lower() in (".html", ".htm"):
+        msgs = _parse_html_export(input_path)
+        _write_sessions(msgs, input_path)
+        return
+    text = input_path.read_text(encoding="utf-8", errors="replace")
+
     if input_path.suffix.lower() == ".json":
         data = json.loads(text)
         from fmn_config import human as _h

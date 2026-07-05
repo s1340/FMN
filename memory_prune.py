@@ -39,6 +39,12 @@ if hasattr(sys.stdout, "reconfigure"):
 
 ARCHIVE_DIR   = mg.VAULT_ROOT / "90_ARCHIVE" / "pruned"
 TRIVIAL_CHARS = 60
+# Faded-fragment sweep (Mal 2026-07-05, growth control): low-significance,
+# SMALL cells that had a fair chance — at least FADED_AGE_DAYS old and never
+# once retrieved — drift to the archive instead of thickening the cloud
+# forever. Restorable via the Archive tab like everything else.
+FADED_CHARS    = 300
+FADED_AGE_DAYS = 14
 
 
 def junk_reason(node: dict) -> str | None:
@@ -69,8 +75,21 @@ def junk_reason(node: dict) -> str | None:
 
     if is_tool_bloat(chunk):
         return "tool-call bloat"
-    if sig == "low" and substantive_chars(chunk) < TRIVIAL_CHARS:
+    n_chars = substantive_chars(chunk)
+    if sig == "low" and n_chars < TRIVIAL_CHARS:
         return "trivial fragment"
+    # Faded fragment: low + small + old enough to have earned a reference,
+    # and never once recalled. The drawer-back, made literal.
+    if sig == "low" and n_chars < FADED_CHARS             and int(node.get("referenced_count", 0) or 0) == 0:
+        from datetime import datetime, timezone
+        try:
+            created = datetime.fromisoformat(
+                str(node.get("created", "")).replace("Z", "+00:00"))
+            age = (datetime.now(timezone.utc) - created).days
+        except Exception:
+            return None
+        if age >= FADED_AGE_DAYS:
+            return f"faded fragment ({age}d old, never recalled)"
     return None
 
 

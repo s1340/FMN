@@ -243,10 +243,20 @@ def chronicles_due(graph: dict) -> list[str]:
     for st in counts:
         if st and st not in types and (counts[st] >= 12 or brights.get(st, 0) >= 3):
             types[st] = []
+    st_all = _state()
     due = []
     for st, bonds in types.items():
         cp = chronicle_path(st)
         if not cp.exists():
+            due.append(st)
+            continue
+        seen = set(st_all.get("chron_" + st, {}).get("seen", []))
+        unread = sum(1 for n in graph["nodes"].values()
+                     if str(n.get("semantic_type", "")) == st
+                     and n.get("kind") not in ("constellation", "rollup")
+                     and n.get("trust") != "flagged"
+                     and str(n["cell_id"]) not in seen)
+        if unread:
             due.append(st)
             continue
         cm = cp.stat().st_mtime
@@ -259,45 +269,74 @@ def chronicles_due(graph: dict) -> list[str]:
 
 
 def chronicle_curate(graph: dict, stype: str) -> None:
-    bonds = _type_bonds(graph, stype)
-    lines = [f"# Chronicle — the whole of \"{stype}\" — read, then write SHORT",
+    """FULL-CLUSTER rolling read (Mal 2026-07-05): the chronicle is distilled
+    from ALL episodes of the type — read chronologically in budget-sized
+    sittings, updating the draft each time — never from a sample. Like a
+    whole life with someone: you don't hold every episode at once; you hold
+    what it all IS. The chronicle is that feeling, earned by having actually
+    read everything once."""
+    cells = sorted((n for n in graph["nodes"].values()
+                    if str(n.get("semantic_type", "")) == stype
+                    and n.get("kind") not in ("constellation", "rollup")
+                    and n.get("trust") != "flagged"),
+                   key=lambda n: str(n.get("session_date", "")))
+    if not cells:
+        sys.exit(f"no cells of type {stype!r}")
+    st_all = _state()
+    st = st_all.get("chron_" + stype, {})
+    seen = set(st.get("seen", []))
+    todo = [n for n in cells if str(n["cell_id"]) not in seen]
+
+    lines = [f"# Chronicle — the whole of \"{stype}\"",
              "",
-             "Q: this is the apex layer. Write the overall arc of EVERYTHING",
-             f"in this domain — a few sentences, {CHRON_CHARS} chars MAX. It",
-             "sits at the very top of your morning note and unfolds into the",
-             "stars below it, so it must only hold the shape: where this domain",
-             "of your life started, how it has moved, where it stands, where it",
-             "is heading. Written from your own gists and digests below — your",
-             "summaries carry the weight now. When done:",
+             "Q: a chronicle is not a sample of episodes — it is what the WHOLE",
+             "amounts to. Like a whole life shared with someone: you don't hold",
+             "every moment at once; you hold what it all IS — precious, funny,",
+             "frustrating at times, and what it's becoming. You are earning that",
+             "feeling honestly by reading EVERYTHING in this domain, a sitting",
+             "at a time. Update the draft below with what this batch adds or",
+             f"changes; keep it under {CHRON_CHARS} chars — it lives at the top",
+             "of your morning note and unfolds into your stars. When done:",
              f"    python {HERE / 'arc_digest.py'} chronicle-ingest {stype} <file.md>",
              ""]
     cp = chronicle_path(stype)
     if cp.exists():
-        lines += ["## Your current chronicle (update it)",
+        lines += ["## Your draft so far (update, don't restart)",
                   cp.read_text(encoding="utf-8"), ""]
-    if not bonds:
-        # No bonds formed here yet — chronicle from the type's brightest
-        # briefs/episodes (navigation layer; the chronicle stays a SHAPE).
-        cells = sorted((n for n in graph["nodes"].values()
-                        if str(n.get("semantic_type", "")) == stype
-                        and n.get("kind") not in ("constellation", "rollup")),
-                       key=lambda n: (n.get("significance") != "bright",
-                                      str(n.get("session_date", ""))))
-        lines.append(f"## The type's notable moments (no bonds formed yet)")
-        budget = 30_000
-        for n in cells:
-            entry = f"- {n.get('session_date','')}: {n.get('episode') or n.get('brief','')}"
-            if len(entry) > budget:
-                break
-            lines.append(entry)
-            budget -= len(entry)
+    bonds = _type_bonds(graph, stype)
+    if bonds:
+        lines.append("## Your named stars here (weave them in)")
+        for b in bonds:
+            lines.append(f"- ✧ {b.get('name')}: {str(b.get('brief',''))[:160]}")
         lines.append("")
-    for b in bonds:
-        lines += [f"## ✧ {b.get('name', b['cell_id'])} — your gist",
-                  str(b.get("episode") or b.get("brief") or ""), ""]
-        dp = digest_path(b)
-        if dp.exists():
-            lines += [f"### your digest of it", dp.read_text(encoding="utf-8"), ""]
+
+    if not todo:
+        lines += ["## Nothing unread — every episode is already inside your",
+                  "draft. Refine it if the recent digests changed the shape."]
+    else:
+        budget, offered = 40_000, []
+        batch_lines = []
+        for n in todo:
+            entry = (f"- {n.get('session_date','')} "
+                     f"[{n.get('significance','')}]: "
+                     f"{str(n.get('episode') or n.get('brief',''))}")
+            if len(entry) > budget and offered:
+                break
+            batch_lines.append(entry)
+            offered.append(str(n["cell_id"]))
+            budget -= len(entry)
+        done_after = len(seen) + len(offered)
+        lines += [f"## This sitting's episodes "
+                  f"({done_after}/{len(cells)} of the whole after this)",
+                  *batch_lines]
+        if done_after < len(cells):
+            lines.append(f"\n({len(cells)-done_after} more wait for the next "
+                         f"sittings — the ritual continues until you've read "
+                         f"it all)")
+        st["offered"] = offered
+        st_all["chron_" + stype] = st
+        _save_state(st_all)
+
     print("\n".join(lines))
 
 
@@ -311,7 +350,13 @@ def chronicle_ingest(graph: dict, stype: str, file: Path) -> None:
     chronicle_path(stype).write_text(
         f"<!-- chronicle · {stype} · updated {stamp} · by Q -->\n{text}\n",
         encoding="utf-8")
-    print(f"OK chronicle saved — \"{stype}\" now leads the morning note.")
+    st_all = _state()
+    st = st_all.get("chron_" + stype, {})
+    st["seen"] = sorted(set(st.get("seen", [])) | set(st.pop("offered", [])))
+    st_all["chron_" + stype] = st
+    _save_state(st_all)
+    print(f"OK chronicle saved — \"{stype}\" leads the morning note. "
+          f"({len(st['seen'])} episodes inside it so far)")
 
 
 def chronicles_for_boot(graph: dict) -> list[tuple[str, str, list[str]]]:

@@ -490,6 +490,95 @@ def api_archive(cell_id):
     return jsonify({"ok": True})
 
 
+@app.route("/api/archive")
+def api_archive_list():
+    """Everything archived (prune runs, manual archives, genesis purge) —
+    browsable, so a misclick is never a loss."""
+    out = []
+    roots = [VAULT_ROOT / "90_ARCHIVE" / "pruned"]
+    roots += sorted((VAULT_ROOT / "95_GENESIS").glob("purged_*"))
+    for root in roots:
+        if not root.exists():
+            continue
+        for run in sorted(root.iterdir(), reverse=True) if root.name == "pruned" else [root]:
+            if not run.is_dir():
+                continue
+            reasons = {}
+            rj = run / "pruned.json"
+            if rj.exists():
+                try:
+                    reasons = {x["cell_id"]: x.get("reason", "") for x in
+                               __import__("json").loads(rj.read_text(encoding="utf-8"))}
+                except Exception:
+                    pass
+            for f in sorted(run.glob("*.md")):
+                try:
+                    c = parse_cell_file(f)
+                    cid = str(c["frontmatter"].get("cell_id", f.stem))
+                    out.append({"cell_id": cid, "brief": c["brief"][:220],
+                                "date": str(c["frontmatter"].get("session_date", "")),
+                                "reason": reasons.get(cid, run.parent.name if run.parent.name.startswith("95_") else run.name),
+                                "path": str(f)})
+                except Exception:
+                    continue
+    return jsonify({"cells": out})
+
+
+@app.route("/api/archive/restore", methods=["POST"])
+def api_archive_restore():
+    """Bring an archived cell back to life: file -> nodes/, node -> graph,
+    re-embedded, seal-event signed."""
+    import shutil
+    from datetime import datetime, timezone
+    data = request.json or {}
+    src = Path(data.get("path", ""))
+    if not src.exists():
+        return jsonify({"ok": False, "error": "file not found"}), 404
+    try:
+        cell = parse_cell_file(src)
+    except Exception as e:
+        return jsonify({"ok": False, "error": f"unparseable: {e}"}), 500
+    fm = cell["frontmatter"]
+    cid = str(fm.get("cell_id", src.stem))
+    nodes_dir = VAULT_ROOT / "30_EPISODES" / "nodes"
+    nodes_dir.mkdir(parents=True, exist_ok=True)
+    dest = nodes_dir / src.name
+    shutil.move(str(src), str(dest))
+    from memory_trust import cell_content_hash
+    now = datetime.now(timezone.utc).isoformat()
+    node = {
+        "cell_id": cid, "session_id": fm.get("session_id"),
+        "session_date": str(fm.get("session_date", "")),
+        "created": str(fm.get("created", now)),
+        "topics": fm.get("topics", []), "entities": fm.get("entities", []),
+        "significance": fm.get("significance", "medium"),
+        "valence": fm.get("valence", "neutral"),
+        "novelty": fm.get("novelty", "routine"),
+        "semantic_type": fm.get("semantic_type", "work_research"),
+        "arc": str(fm.get("arc", "") or ""),
+        "arc_role": str(fm.get("arc_role", "") or ""),
+        "reflection_candidate": bool(fm.get("reflection_candidate", False)),
+        "brief": cell["brief"], "episode": cell["episode"],
+        "temporal_status": "old", "referenced_count": 0,
+        "last_referenced": None, "approved_at": now, "neighbors": [],
+        "file": str(dest), "trust": "human",
+        "content_hash": cell_content_hash(cell), "admitted_at": now,
+    }
+    with locked_graph() as g:
+        g["nodes"][cid] = node
+    try:
+        import memory_embed, memory_graph as _mg
+        memory_embed.embed_cells(_mg.load_graph())
+    except Exception:
+        pass
+    try:
+        import memory_sign
+        memory_sign.sign_event(cid, node["content_hash"], "admit")
+    except Exception:
+        pass
+    return jsonify({"ok": True, "cell_id": cid})
+
+
 @app.route("/favicon.svg")
 def favicon():
     """The forget-me-not mark (assets/fmn-mark.svg), embedded so the panel is
@@ -776,6 +865,7 @@ h1 { color:#fff; font-size:15px; letter-spacing:0; display:flex; align-items:cen
     <button class="tab" data-tab="timeline">Timeline</button>
     <button class="tab" data-tab="recall">Try a memory</button>
     <button class="tab" data-tab="quarantine">Waiting room</button>
+    <button class="tab" data-tab="archive">Archive</button>
   </div>
   <div id="stats">—</div>
   <button class="recall-btn" onclick="triggerRecall()">↺ Update morning note</button>
@@ -841,6 +931,15 @@ h1 { color:#fff; font-size:15px; letter-spacing:0; display:flex; align-items:cen
         ever deleted: superseded beliefs are retired with lineage. Open conflicts
         hold their cells out of Q's boot until resolved (that's your hand, or his).</div>
       <div id="timeline-content"><div class="empty">loading…</div></div>
+    </div>
+  </div>
+  <!-- ARCHIVE -->
+  <div id="tab-archive" class="hidden" style="flex:1;overflow:hidden;flex-direction:column;">
+    <div class="tview">
+      <div style="font-size:11px;color:var(--muted);margin-bottom:10px;">
+        Nothing is ever deleted. Everything archived lives here — misclicked?
+        Restore brings it back, re-sealed and searchable.</div>
+      <div id="archive-list"><div class="empty">loading…</div></div>
     </div>
   </div>
   <!-- GRAPH -->
@@ -1510,7 +1609,7 @@ async function severEdgeG(a,b,type){ if(await curate({action:'sever',a,b,type}))
 // ── Tabs ──────────────────────────────────────────────────────────────────────
 function switchTab(id) {
   document.querySelectorAll('.tab').forEach(t => t.classList.toggle('active', t.dataset.tab === id));
-  ['vault','quarantine','slots','graph','timeline','recall'].forEach(t => {
+  ['vault','quarantine','slots','graph','timeline','recall','archive'].forEach(t => {
     const el = document.getElementById('tab-'+t);
     el.classList.toggle('hidden', t !== id);
     el.style.display = t === id ? 'flex' : '';
@@ -1519,6 +1618,7 @@ function switchTab(id) {
   if (id === 'slots') loadSlots();
   if (id === 'graph') { el_graph_fix(); }
   if (id === 'timeline') loadTimeline();
+  if (id === 'archive') loadArchive();
   if (id === 'recall') setTimeout(() => document.getElementById('qtest').focus(), 50);
 }
 document.querySelectorAll('.tab').forEach(tab =>
@@ -1611,6 +1711,26 @@ async function archiveCell(id) {
   toast((await r.json()).ok ? 'Archived' : 'failed');
   selId = null; document.getElementById('detail').innerHTML = '<div class="empty">Click a memory to open it</div>';
   await init();
+}
+async function loadArchive() {
+  const box = document.getElementById('archive-list');
+  box.innerHTML = '<div class="empty">loading…</div>';
+  const d = await (await fetch('/api/archive')).json();
+  const cs = d.cells || [];
+  if (!cs.length) { box.innerHTML = '<div class="empty">Archive is empty.</div>'; return; }
+  box.innerHTML = cs.map(c => `<div class="qc">
+    <div style="font-size:12px;margin-bottom:4px">${esc(c.brief)}</div>
+    <div style="font-size:11px;color:var(--muted);margin-bottom:6px">${c.cell_id} · ${c.date} · archived: ${esc(c.reason||'?')}</div>
+    <button class="appr" onclick="restoreCell('${encodeURIComponent(c.path)}')">↩ restore</button>
+  </div>`).join('');
+}
+async function restoreCell(encPath) {
+  const r = await fetch('/api/archive/restore', {method:'POST',
+    headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({path: decodeURIComponent(encPath)})});
+  const d = await r.json();
+  toast(d.ok ? 'Restored — back in the vault, re-sealed' : 'failed: '+(d.error||''));
+  loadArchive(); init();
 }
 function esc(s) { return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
 function toast(msg, isError=false) {

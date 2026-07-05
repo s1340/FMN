@@ -53,7 +53,8 @@ CONSTELLATION_DIR = mg.VAULT_ROOT / "60_CONSTELLATIONS"
 MIN_MEMBERS      = 4      # a bond needs a few moments
 MIN_NOTABLE      = 2      # at least this many bright/high in the cluster
 MAX_MEMBERS      = 25     # beyond this it's not one bond — needs sub-clustering
-EDGE_WEIGHT_MIN  = 1.0    # only edges this strong count as bonds
+MIN_TOPIC        = 3      # a topic must recur this many times to anchor a bond
+EDGE_WEIGHT_MIN  = 1.0    # only edges this strong count (legacy edge detector)
 
 
 # ── Cluster detection (union-find over the weighted graph) ───────────────────
@@ -92,37 +93,62 @@ def _components(graph: dict) -> list[list[str]]:
 
 
 def detect(graph: dict) -> list[dict]:
-    """Return candidate constellations: dense clusters worth consolidating.
+    """Candidate constellations by THEME: cells that share a RECURRING TOPIC
+    within a semantic type (Mal 2026-07-05 — "if a topic surfaces multiple
+    times it should start grouping"). This mirrors the Map's type->recurring-
+    topic layout exactly, so what you SEE cluster is what gets PROPOSED as a
+    named bond — "the making of FMN", "ghost hunt", "mech-interp" — rather than
+    the old dense-edge components (which found nothing on the real vault).
 
-    Oversized components (> MAX_MEMBERS) are reported with needs_subcluster=True
-    rather than proposed as one bond — a 50-cell blob is not a constellation,
-    it's a region that wants splitting (a future community-detection pass).
-    Never silently truncate; flag it so the human sees the blob honestly.
+    Each cell joins at most ONE theme (its strongest recurring topic), so the
+    proposed bonds don't overlap. Formation stays proposed-never-auto: Q reads
+    the member chunks, names the bond, and writes the gist.
     """
+    live = [(cid, n) for cid, n in graph["nodes"].items()
+            if n.get("kind") not in ("constellation", "rollup")
+            and not n.get("in_constellation")
+            and n.get("trust") != "flagged"]
+    n_live = len(live) or 1
+
+    # topic frequency across live cells; a topic on >25% of cells is a theme of
+    # the whole vault, not a bond (same ubiquity rule as the graph + edges).
+    tfreq: dict[str, int] = {}
+    for _, n in live:
+        for t in n.get("topics", []):
+            tfreq[str(t).lower()] = tfreq.get(str(t).lower(), 0) + 1
+    ubiq = max(6, n_live * 0.25)
+
+    def theme_of(n):
+        cands = [str(t).lower() for t in n.get("topics", [])
+                 if MIN_TOPIC <= tfreq.get(str(t).lower(), 0) <= ubiq]
+        cands.sort(key=lambda t: -tfreq[t])
+        return cands[0] if cands else None
+
+    groups: dict[tuple, list[str]] = {}
+    for cid, n in live:
+        th = theme_of(n)
+        if th:
+            key = (n.get("semantic_type", "work_research"), th)
+            groups.setdefault(key, []).append(cid)
+
     out = []
-    for comp in _components(graph):
-        if len(comp) < MIN_MEMBERS:
+    for (stype, topic), members in groups.items():
+        if len(members) < MIN_MEMBERS:
             continue
-        nodes = [graph["nodes"][c] for c in comp]
-        notable = sum(1 for n in nodes
-                      if n.get("significance") in ("bright", "high"))
+        nodes = [graph["nodes"][c] for c in members]
+        notable = sum(1 for x in nodes
+                      if x.get("significance") in ("bright", "high"))
         if notable < MIN_NOTABLE:
             continue
-        oversized = len(comp) > MAX_MEMBERS
-        dates = sorted(n.get("session_date", "") for n in nodes if n.get("session_date"))
-        # dominant theme = most common topic across the cluster
-        topic_freq: dict[str, int] = {}
-        for n in nodes:
-            for t in n.get("topics", []):
-                topic_freq[t.lower()] = topic_freq.get(t.lower(), 0) + 1
-        theme = max(topic_freq, key=topic_freq.get) if topic_freq else "—"
+        dates = sorted(x.get("session_date", "") for x in nodes if x.get("session_date"))
         out.append({
-            "members": comp,
-            "size": len(comp),
+            "members": members,
+            "size": len(members),
             "notable": notable,
-            "theme": theme,
+            "theme": topic.replace("_", " "),
+            "type": stype,
             "span": f"{dates[0]}..{dates[-1]}" if dates else "—",
-            "needs_subcluster": oversized,
+            "needs_subcluster": len(members) > MAX_MEMBERS,
         })
     out.sort(key=lambda c: -c["size"])
     return out
@@ -287,10 +313,12 @@ def main():
             print("No constellation candidates yet — clusters too small or sparse.")
         for i, c in enumerate(cands, 1):
             flag = "  ⚠ TOO LARGE — needs sub-clustering, don't form as one" if c["needs_subcluster"] else ""
-            print(f"[{i}] {c['size']} cells · {c['notable']} notable · "
-                  f"theme={c['theme']} · {c['span']}{flag}")
+            print(f"[{i}] \"{c['theme']}\" ({c.get('type','?').replace('_',' ')}) · "
+                  f"{c['size']} cells · {c['notable']} notable · {c['span']}{flag}")
             if not c["needs_subcluster"]:
                 print(f"    members: {','.join(c['members'])}")
+                print(f"    form: fmn.py constellation curate {','.join(c['members'][:3])}... "
+                      f"then write a gist and name it")
 
     elif args.command == "curate":
         ids = (args.args[0].split(",") if args.args else args.members.split(","))

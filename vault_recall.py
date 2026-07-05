@@ -380,6 +380,22 @@ def format_recall(slots: dict[str, list[dict]], graph: dict) -> str:
     except Exception:
         pass
 
+    # Constellation nudge: recurring topics that look like bonds (detect is
+    # theme-based now). Surfaced so Q is actually invited to form them — the
+    # detection used to write to a file nobody read. Formation stays his.
+    try:
+        import constellation
+        cands = [c for c in constellation.detect(graph) if not c["needs_subcluster"]]
+        if cands:
+            fmn_dir = Path(__file__).parent
+            top = ", ".join(f"\"{c['theme']}\" ({c['size']})" for c in cands[:4])
+            lines += [f"**✧ {len(cands)} topics look like bonds** — {top}. When one "
+                      f"feels like a real arc, run `python {fmn_dir / 'fmn.py'} "
+                      f"constellation detect`, read the member chunks, and give it "
+                      f"a name. Consolidating is yours to choose.", ""]
+    except Exception:
+        pass
+
     # Reflection nudge: passive, not forced. When consolidation is due, Q sees
     # it at wake and chooses when to do it — in conversation, from the chunks.
     # (Reflection can't be a silent cron: an auto-summary is confabulated

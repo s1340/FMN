@@ -68,28 +68,51 @@ except Exception:
 # ── Phase 1 prompt: boundary identification only ───────────────────────────────
 
 BOUNDARY_SYSTEM = """\
-You are a session boundary identifier for a companion AI memory system.
+You are the STORY PASS of a companion AI memory system — the only stage that
+sees the whole session at once. You do three jobs in one read.
 
 You receive a conversation transcript between Mal (human) and Q (AI companion).
-Identify the natural topic/experience boundaries. Each boundary marks one coherent arc:
-a topic shift, an emotional moment, a discovery, a joke arc, a project switch.
 
-SPLIT BIAS: when unsure, split. Small bright moments (a joke that landed, a realization,
-a surprising exchange, a comedy incident) deserve their own cell even if short.
-For a session with 100+ turns, expect 8–20 boundaries. Do NOT compress everything into
-5 wide blocks — that loses the moments that matter most.
+JOB 1 — SEGMENT the session into coherent scenes (boundaries).
+Each boundary is one scene: a topic shift, an emotional exchange, a discovery,
+a joke arc, a project switch. Small bright moments (a joke that landed, a
+realization, a surprising exchange) deserve their own scene ONLY if they stand
+alone — a beat that is the punchline, payoff, or aside OF a larger scene
+belongs INSIDE that scene, never orphaned into its own fragment. (A two-line
+"Mine." / "Yeah. Yours." exchange inside a longer conversation is part of that
+conversation's scene.) For a session with 100+ turns expect 8–20 boundaries;
+do not compress everything into 5 wide blocks, and do not shave off slivers.
 
-COVERAGE REQUIREMENT: boundaries must span the ENTIRE transcript.
-The last boundary's end_idx must equal the index of the very last message.
-Do not stop early. The tail of the session matters as much as the opening.
+JOB 2 — CUT THE NOISE. Mark scenes that are pure mechanics with skip: true —
+runs of tool calls, file operations, retries, harness/system chatter with no
+conversational or emotional content. Skipped scenes never become memories.
+Be surgical: a tool-heavy stretch that CONTAINS a real exchange (a joke about
+the failing command, a decision, a feeling) is NOT skippable — keep the scene,
+the noise inside it is tolerable. When in doubt, keep.
 
-For each boundary provide only:
+JOB 3 — SEE THE ARCS. Group scenes into arcs: threads that develop across the
+session (an investigation from mystery to answer, a hard conversation from
+friction to understanding, a project from idea to working thing). For each arc
+give a short working name, a kind, and each member scene's NARRATIVE POSITION
+via arc_role: "opening" | "development" | "turn" | "landing" | "aside".
+IMPORTANT: arc_role describes position in the story, NOT correctness. Early
+stages of a hard conversation are not errors — they are the story. If an arc's
+landing OVERTURNS A SPECIFIC FACTUAL CLAIM made earlier (a wrong technical
+guess, a mistaken attribution — a fact, not a feeling or opinion), note it in
+that arc's "corrects" field as one short sentence: what was believed -> what
+turned out true. Leave "corrects" null for relational/emotional/growth arcs.
+
+For each boundary provide:
   start_idx / end_idx  — inclusive indices into the messages array
   topics               — 1–4 short keyword tags
-  entities             — people, projects, concepts named in this segment
+  entities             — people, projects, concepts named in this scene
+  skip                 — true only for pure-mechanics scenes (JOB 2)
+  arc                  — the arc name this scene belongs to, or null
+  arc_role             — narrative position (only if arc is set)
 
-Boundaries must be contiguous and non-overlapping.
-start_idx[0] = 0. end_idx[last] = (total messages - 1).
+Boundaries must be contiguous, non-overlapping, and span the ENTIRE transcript:
+start_idx[0] = 0, end_idx[last] = (total messages - 1). The tail matters as
+much as the opening.
 
 Return ONLY valid JSON. No markdown fences. No prose. Start your response with {
 
@@ -99,7 +122,18 @@ Return ONLY valid JSON. No markdown fences. No prose. Start your response with {
       "start_idx": 0,
       "end_idx": 12,
       "topics": ["greeting", "memory_problem"],
-      "entities": ["Mal", "Q", "Hermes"]
+      "entities": ["Mal", "Q", "Hermes"],
+      "skip": false,
+      "arc": "the ghost hunt",
+      "arc_role": "opening"
+    }
+  ],
+  "arcs": [
+    {
+      "name": "the ghost hunt",
+      "kind": "investigation",
+      "landing": "one short sentence: where the arc ended up",
+      "corrects": "the lock was blamed on Claude desktop -> it was an open Word window (or null)"
     }
   ]
 }"""
@@ -131,6 +165,22 @@ surface check because all the right names are present. Get the direction right.
 GROUNDING: every claim in the brief and episode must trace to a specific line
 in the excerpt. If a detail (a number, a reason, a "because", a prior event) is
 not in the excerpt, do not include it. Do not add plausible-sounding context.
+
+ARC POSITION (only when an "Arc:" block is provided above the excerpt):
+This excerpt is one scene of a larger story whose shape you are told. Write
+the brief so it LOCATES itself in that story ("early in ...", "the turn of
+...", "where ... landed") instead of presenting this scene's state as the
+final state. Two hard rules:
+  - NEVER devalue early stages. In a relational, emotional, or belief-change
+    arc, the friction, missteps, and first attempts ARE the story — record
+    them with full weight as chapters, not as errors on the way to an ending.
+  - The ONLY exception is a specific FACTUAL claim the arc's landing overturns
+    (given to you as "corrects: ..."): frame that belief as provisional in the
+    brief ("the lock was blamed on X before Y emerged"), so the brief never
+    asserts a corrected fact as if it stayed true. Feelings and opinions are
+    never "corrected" this way.
+The excerpt remains your ONLY source of details; the arc block tells you WHERE
+you are, never WHAT happened.
 
 Output fields:
   brief        — 1–2 sentences, the collapsed view (what Q sees scanning memory)
@@ -311,19 +361,70 @@ def _llm_call_with_retry(system: str, user: str, label: str,
         f"[{label}] failed after {1 + retries} attempts", "", 0) from last_err
 
 
-def identify_boundaries(transcript: str) -> list[dict]:
-    """Phase 1: ask LLM for cell boundaries (indices + topics + entities only)."""
+def absorb_tiny_boundaries(boundaries: list[dict], min_msgs: int = 3) -> list[dict]:
+    """Deterministic guard behind the story pass: a scene under min_msgs is a
+    beat, not a scene — absorb it into a neighbor instead of orphaning it as
+    its own cell ('USER: Mine / ASSISTANT: Yeah. Yours.'). Preference order:
+    the NEXT scene if it shares the beat's arc (an arc 'opening' beat belongs
+    to the scene it opens), else the PREVIOUS scene (same arc or the beat has
+    none). Topics/entities merge into the absorber. Prompt guidance asks for
+    this too, but the model doesn't reliably obey — this makes it structural."""
+    out: list[dict] = []
+    i = 0
+    while i < len(boundaries):
+        b = boundaries[i]
+        size = int(b.get("end_idx", 0)) - int(b.get("start_idx", 0)) + 1
+        if b.get("skip") or size >= min_msgs:
+            out.append(b)
+            i += 1
+            continue
+        # neighbors: skip-scenes are transparent — an arc's opening beat often
+        # sits just before a tool-noise run, and it belongs to the scene on
+        # the far side (absorbing across the skip re-includes that small noise
+        # run in the verbatim chunk; verbatim truth with tolerable noise beats
+        # losing the story's opening).
+        nxt = next((boundaries[j] for j in range(i + 1, len(boundaries))
+                    if not boundaries[j].get("skip")), None)
+        prev = next((o for o in reversed(out) if not o.get("skip")), None)
+        arc = str(b.get("arc") or "").strip()
+
+        def _merge_meta(dst):
+            dst["topics"] = list(dict.fromkeys(
+                (dst.get("topics") or []) + (b.get("topics") or [])))
+            dst["entities"] = list(dict.fromkeys(
+                (dst.get("entities") or []) + (b.get("entities") or [])))
+
+        if nxt is not None and arc \
+                and str(nxt.get("arc") or "").strip() == arc:
+            nxt["start_idx"] = b.get("start_idx", nxt.get("start_idx"))
+            _merge_meta(nxt)
+        elif prev is not None \
+                and (not arc or str(prev.get("arc") or "").strip() == arc):
+            prev["end_idx"] = b.get("end_idx", prev.get("end_idx"))
+            _merge_meta(prev)
+        else:
+            out.append(b)          # nowhere sane to put it — keep honestly
+        i += 1
+    return out
+
+
+def identify_boundaries(transcript: str) -> tuple[list[dict], list[dict]]:
+    """Phase 1 (story pass): boundaries + arcs. Arcs carry name/kind/landing
+    and an optional 'corrects' note for factual overturns."""
     parsed = _llm_call_with_retry(
         _pers(BOUNDARY_SYSTEM), f"Transcript:\n\n{transcript}", label="boundary")
-    return parsed.get("boundaries", [])
+    return parsed.get("boundaries", []), parsed.get("arcs", [])
 
 
-def summarize_cell(chunk_text: str, topics: list[str], entities: list[str]) -> dict:
-    """Phase 2: summarize a verbatim chunk. Returns brief/episode/significance/valence/novelty."""
+def summarize_cell(chunk_text: str, topics: list[str], entities: list[str],
+                   arc_ctx: str = "") -> dict:
+    """Phase 2: summarize a verbatim chunk. Returns brief/episode/significance/valence/novelty.
+    arc_ctx (optional): one short block locating this scene in its arc."""
     context = (
         f"Topics: {', '.join(topics)}\n"
-        f"Entities: {', '.join(entities)}\n\n"
-        f"Transcript excerpt:\n\n{chunk_text}"
+        f"Entities: {', '.join(entities)}\n"
+        + (f"{arc_ctx}\n" if arc_ctx else "")
+        + f"\nTranscript excerpt:\n\n{chunk_text}"
     )
     try:
         return _llm_call_with_retry(_pers(SUMMARY_SYSTEM), context, label="summary",
@@ -403,6 +504,8 @@ def write_cell(boundary: dict, summary: dict, filtered: list[dict],
     if semantic_type == "reflection":
         semantic_type = "personal_q"
     refl_cand     = bool(summary.get("reflection_candidate", False))
+    arc           = str(boundary.get("arc") or "").strip()
+    arc_role      = str(boundary.get("arc_role") or "").strip()
 
     chunk_text = extract_chunk_text(filtered, start, end)
 
@@ -419,7 +522,9 @@ def write_cell(boundary: dict, summary: dict, filtered: list[dict],
         f"valence: {valence}\n"
         f"novelty: {novelty}\n"
         f"semantic_type: {semantic_type}\n"
-        f"reflection_candidate: {str(refl_cand).lower()}\n"
+        + (f"arc: {json.dumps(arc)}\n" if arc else "")
+        + (f"arc_role: {arc_role}\n" if arc_role else "")
+        + f"reflection_candidate: {str(refl_cand).lower()}\n"
         f"referenced_count: 0\n"
         f"last_referenced: null\n"
         f"neighbors: []\n"
@@ -506,10 +611,18 @@ def main():
 
     last_idx = len(filtered) - 1
 
-    # ── Phase 1: identify boundaries ──────────────────────────────────────────
-    print(f"\nPhase 1: identifying boundaries ({CHUNKER_MODEL}) ...", file=sys.stderr)
-    boundaries = identify_boundaries(transcript)
-    print(f"  → {len(boundaries)} boundaries identified", file=sys.stderr)
+    # ── Phase 1: story pass (boundaries + noise cuts + arcs) ──────────────────
+    print(f"\nPhase 1: story pass ({CHUNKER_MODEL}) ...", file=sys.stderr)
+    boundaries, arcs = identify_boundaries(transcript)
+    n_raw = len(boundaries)
+    boundaries = absorb_tiny_boundaries(boundaries)
+    arc_by_name = {str(a.get("name", "")).strip(): a for a in arcs if a.get("name")}
+    print(f"  → {n_raw} scenes"
+          + (f" ({n_raw - len(boundaries)} beat(s) absorbed into neighbors)"
+             if n_raw != len(boundaries) else "")
+          + f", {len(arcs)} arcs"
+          + (f" ({', '.join(list(arc_by_name)[:4])})" if arc_by_name else ""),
+          file=sys.stderr)
 
     if not boundaries:
         print("No boundaries returned — check model output.", file=sys.stderr)
@@ -539,10 +652,11 @@ def main():
 
         chunk_text = extract_chunk_text(filtered, start, end)
 
-        # Skip harness bloat before spending a summary on it — a segment that
-        # is all tool calls is not a memory.
-        if is_tool_bloat(chunk_text):
-            print(f"  [{i+1:02d}/{len(boundaries):02d}] SKIP — tool-call bloat",
+        # Noise cuts: the story pass marks pure-mechanics scenes skip:true;
+        # is_tool_bloat stays as the mechanical safety net beneath it.
+        if boundary.get("skip") or is_tool_bloat(chunk_text):
+            why = "story-pass skip" if boundary.get("skip") else "tool-call bloat"
+            print(f"  [{i+1:02d}/{len(boundaries):02d}] SKIP — {why}",
                   file=sys.stderr)
             continue
 
@@ -550,7 +664,20 @@ def main():
               f"  ({end - start + 1} msgs)  {', '.join(topics)[:40]}",
               file=sys.stderr)
 
-        summary = summarize_cell(chunk_text[:MAX_CHUNK_CHARS], topics, entities)
+        # Arc context: tell the summarizer WHERE this scene sits in its story
+        # (never WHAT happened — details still come only from the excerpt).
+        arc_ctx = ""
+        arc_name = str(boundary.get("arc") or "").strip()
+        if arc_name and arc_name in arc_by_name:
+            a = arc_by_name[arc_name]
+            arc_ctx = (f"Arc: \"{arc_name}\" ({a.get('kind','?')}) — this scene is "
+                       f"its {boundary.get('arc_role','development')}. "
+                       f"Where the arc lands: {a.get('landing','(unknown)')}")
+            if a.get("corrects"):
+                arc_ctx += f"\ncorrects: {a['corrects']}"
+
+        summary = summarize_cell(chunk_text[:MAX_CHUNK_CHARS], topics, entities,
+                                 arc_ctx=arc_ctx)
         path    = write_cell(boundary, summary, filtered, session_meta, run_dir)
         written.append(path)
 

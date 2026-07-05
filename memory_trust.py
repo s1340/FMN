@@ -206,6 +206,8 @@ def admit(dry: bool) -> int:
                 "valence": fm.get("valence", "neutral"),
                 "novelty": fm.get("novelty", "routine"),
                 "semantic_type": fm.get("semantic_type", "work_research"),
+                "arc": str(fm.get("arc", "") or ""),
+                "arc_role": str(fm.get("arc_role", "") or ""),
                 "reflection_candidate": bool(fm.get("reflection_candidate", False)),
                 "brief": cell["brief"],
                 "episode": cell["episode"],

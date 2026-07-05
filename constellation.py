@@ -126,6 +126,14 @@ def detect(graph: dict) -> list[dict]:
 
     groups: dict[tuple, list[str]] = {}
     for cid, n in live:
+        # Arc tags from the story pass are the strongest grouping signal —
+        # the analyzer SAW these scenes as one story. Theme (recurring topic)
+        # catches everything older or untagged.
+        arc = str(n.get("arc") or "").strip()
+        if arc:
+            groups.setdefault(("arc:" + n.get("semantic_type", ""), arc.lower()),
+                              []).append(cid)
+            continue
         th = theme_of(n)
         if th:
             key = (n.get("semantic_type", "work_research"), th)
@@ -141,12 +149,14 @@ def detect(graph: dict) -> list[dict]:
         if notable < MIN_NOTABLE:
             continue
         dates = sorted(x.get("session_date", "") for x in nodes if x.get("session_date"))
+        from_arc = stype.startswith("arc:")
         out.append({
             "members": members,
             "size": len(members),
             "notable": notable,
             "theme": topic.replace("_", " "),
-            "type": stype,
+            "type": stype[4:] if from_arc else stype,
+            "from_arc": from_arc,
             "span": f"{dates[0]}..{dates[-1]}" if dates else "—",
             "needs_subcluster": len(members) > MAX_MEMBERS,
         })

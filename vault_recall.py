@@ -447,6 +447,17 @@ def format_recall(slots: dict[str, list[dict]], graph: dict) -> str:
     # Machine assembles, Q writes; these are his words about the whole arc.
     try:
         import arc_digest
+        # Apex: type chronicles — the overall arc of everything, each
+        # unfolding into its named stars. The note holds only the shape.
+        chrons = arc_digest.chronicles_for_boot(graph)
+        if chrons:
+            lines.append("### ✦ The shape of everything "
+                         "*(your chronicles — each unfolds into its stars)*")
+            for stype, body, stars in chrons:
+                unfold = ("  → unfolds into: "
+                          + ", ".join(f"✧ {s}" for s in stars)) if stars else ""
+                lines.append(f"**{stype.replace('_',' ')}** — {body}{unfold}")
+            lines.append("")
         ds = arc_digest.digests_for_boot()
         if ds:
             lines.append("### ✧ The story so far — your arc digests "

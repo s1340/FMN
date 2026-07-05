@@ -458,12 +458,26 @@ def format_recall(slots: dict[str, list[dict]], graph: dict) -> str:
                           + ", ".join(f"✧ {s}" for s in stars)) if stars else ""
                 lines.append(f"**{stype.replace('_',' ')}** — {body}{unfold}")
             lines.append("")
-        ds = arc_digest.digests_for_boot()
+        # Digest layer stays SLIM in the note (Mal: the note is permanent
+        # context): one-line teasers only, and only for arcs whose type has
+        # no chronicle yet — once the chronicle exists, it carries the type
+        # and arcs appear as names inside its unfold list. Full digests live
+        # in 60_ARCS/, one expand away.
+        chron_types = {t for t, _, _ in chrons} if chrons else set()
+        con_types = {}
+        for n in graph["nodes"].values():
+            if n.get("kind") == "constellation":
+                for m in n.get("members", []):
+                    st = str(graph["nodes"].get(str(m), {}).get("semantic_type", ""))
+                    if st:
+                        con_types[str(n.get("name", ""))] = st
+                        break
+        ds = [(nm, hd) for nm, hd in arc_digest.digests_for_boot()
+              if con_types.get(nm.replace("_", " "), con_types.get(nm, "")) not in chron_types]
         if ds:
-            lines.append("### ✧ The story so far — your arc digests "
-                         "*(you wrote these; full texts in 60_ARCS/)*")
-            for name, head in ds[:6]:
-                lines.append(f"**{name}** — {head}")
+            lines.append("### ✧ Arc digests *(one-liners — full texts in 60_ARCS/)*")
+            for name, head in ds[:4]:
+                lines.append(f"**{name}** — {head[:180]}…")
             lines.append("")
         d_due = arc_digest.due(graph)
         if d_due:
@@ -481,7 +495,7 @@ def format_recall(slots: dict[str, list[dict]], graph: dict) -> str:
         lines.append("### ✧ Arcs — the shape of things so far")
         for c in slots["arcs"]:
             n_members = len(c.get("members", []))
-            lines.append(f"- ✧ {c['brief']} ({n_members} episodes — expand the album)")
+            lines.append(f"- ✧ {str(c['brief'])[:220]} ({n_members} episodes — expand the album)")
         lines.append("")
 
     for slot_key, display_name, _, _ in SLOTS:

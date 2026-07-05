@@ -1256,10 +1256,11 @@ function initGraph() {
   const node = g.append('g').selectAll('path').data(nodes).join('path')
     .attr('d', d => isCon(d)
         ? d3.symbol().type(d3.symbolStar).size(360)()
-        : d3.symbol().type(d3.symbolCircle).size(Math.pow((SIG_R[d.significance]||9)*1.7,2))())
+        : d3.symbol().type(d3.symbolSquare).size(Math.pow((SIG_R[d.significance]||9)*1.7,2))())
     .attr('fill', d => isCon(d) ? '#efc842' : (TYPE_COLOR[d.semantic_type] || '#8a8a80'))
     .attr('stroke', INK)
     .attr('stroke-width', d => d.significance === 'bright' || isCon(d) ? 2 : 1.25)
+    .attr('shape-rendering', 'crispEdges')
     .attr('cursor', 'pointer')
     .call(d3.drag()
       // Drag moves ONLY the grabbed cell. Once the board has settled every
@@ -1302,14 +1303,8 @@ function initGraph() {
     .attr('text-anchor','middle').attr('pointer-events','none')
     .text(d => d.kind==='constellation' ? ('✧ ' + (d.name||'constellation')) : shortLabel(d));
 
-  // Importance marker (Mal): bright cells wear a gold ★ at the corner so you
-  // can spot what matters at a glance, not just by size.
-  const star = g.append('g').selectAll('text')
-    .data(nodes.filter(n => n.significance==='bright' && !isCon(n)))
-    .join('text')
-    .attr('text-anchor','middle').attr('pointer-events','none')
-    .attr('font-size','12px').attr('fill','#efc842').attr('stroke',INK).attr('stroke-width',0.4)
-    .text('★');
+  // Importance = SIZE (bigger square = more important). Tiny corner-star
+  // markers were removed (Mal): invisible once the map fills up.
 
   // Click-to-focus: a clicked cell keeps full opacity along with its related
   // cells; everything unrelated dims, and only the focused cell's strings show.
@@ -1318,13 +1313,12 @@ function initGraph() {
     const on = d => d.id === id || nb.has(d.id);
     node.attr('opacity', d => on(d) ? 1 : 0.12);
     label.attr('opacity', d => on(d) ? 1 : 0.12);
-    star.attr('opacity', d => on(d) ? 1 : 0.12);
     const touches = l => { const s = l.source.id||l.source, t = l.target.id||l.target;
       return s === id || t === id; };
     link.attr('stroke-opacity', l => touches(l) ? 0.5 : 0);
   }
   function clearFocus() {
-    node.attr('opacity', 1); label.attr('opacity', 1); star.attr('opacity', 1);
+    node.attr('opacity', 1); label.attr('opacity', 1);
     link.attr('stroke-opacity', 0);
   }
   // Clicking empty space clears the focus/selection.
@@ -1392,7 +1386,6 @@ function initGraph() {
       node.attr('transform', d => `translate(${d.x},${d.y})`);
       // label sits just under the node edge, tracking exactly
       label.attr('x',d=>d.x).attr('y',d=>d.y + (isCon(d)?18:(SIG_R[d.significance]||9)) + 12);
-      star.attr('x',d=>d.x + (SIG_R[d.significance]||9) + 3).attr('y',d=>d.y - (SIG_R[d.significance]||9) + 2);
       // marching-ants box hugs the selected node
       const sel = nodeMap[selectedGraphId] && nodes.find(n => n.id === selectedGraphId);
       if (sel) {
@@ -1417,7 +1410,7 @@ function renderLegend() {
     '<div style="color:var(--muted);font-size:10px;margin-bottom:6px;text-transform:uppercase;letter-spacing:.05em">Types</div>' +
     types.map(([t,c])=>`<div class="legend-row"><span class="leg-dot" style="background:${c}"></span><span>${t.replace('_',' ')}</span></div>`).join('') +
     '<div style="color:var(--muted);font-size:10px;margin:8px 0 6px;text-transform:uppercase;letter-spacing:.05em">Importance</div>' +
-    '<div class="legend-row"><span style="color:#efc842;font-size:12px;width:10px;text-align:center">★</span><span>bright · bigger square = more important</span></div>' +
+    '<div class="legend-row"><span style="width:12px"><span style="display:inline-block;width:10px;height:10px;background:#5a8bd6;border:1px solid #161611"></span></span><span>bigger square = more important</span></div>' +
     '<div style="color:var(--muted);font-size:10px;margin-top:8px;line-height:1.4">Click a cell to light up what it connects to.</div>';
 }
 

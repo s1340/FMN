@@ -66,6 +66,7 @@ ROUTES = {
     "eval":          ("memory_eval.py", ["run"]),
     "sign":          ("memory_sign.py", []),
     "stats":         ("memory_trust.py", ["stats"]),
+    "prune":         ("memory_prune.py", []),
     "panel":         ("vault_viz.py", []),
     "timeline":      ("memory_timeline.py", []),
     "rollup":        ("consolidate.py", []),

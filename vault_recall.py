@@ -64,19 +64,18 @@ RECALL_END   = "<!-- VAULT_RECALL_END -->"
 
 # Slot config: (slot_key, display_name, max_cells, semantic_types)
 # semantic_types=None → filled by flag/recency logic, not type matching.
-# Roomier defaults (2026-07-05, Mal wanted many more slots); personal cells
-# get their own slots instead of sharing Background. A 'anchors' slot must
-# always exist (constellations/pinned/bright lead there).
+# High-signal defaults (2026-07-05, Mal): the morning note should be ARCS +
+# a few SPECIFIC FAVORITE episodes, not a wall of narrow type-categories that
+# fill with low-value cells ("the OpenRouter env var name"). Arcs lead (a
+# separate section, from constellations); 'anchors' here = favorite moments
+# (bright + pinned), plus a genuine reflection slot and a little Recent.
+# Narrow type-slots (active_work/corrections/background/personal) removed —
+# important moments of those kinds are bright and surface as favorites; the
+# rest was noise. Customize via vault.toml [[recall.slots]] to bring them back.
 _DEFAULT_SLOTS = [
-    ("anchors",     "Anchors",           4, None),
-    ("active_work", "Active Work",       4, ["work_research"]),
-    ("relational",  "Relational",        3, ["relationship"]),
-    ("corrections", "Corrections",       2, ["correction"]),
+    ("anchors",     "Favorite moments",  6, None),
     ("reflection",  "Reflection Notes",  2, ["reflection"]),
-    ("about_you",   f"About {_companion()}", 2, [_ptypes()[1]]),
-    ("about_human", f"About {_human()}",  2, [_ptypes()[0]]),
-    ("background",  "Background",         2, ["environment_tools"]),
-    ("recent",      "Recent",            3, None),
+    ("recent",      "Lately",            3, None),
 ]
 # vault.toml [[recall.slots]] overrides the defaults if present (customizable).
 try:

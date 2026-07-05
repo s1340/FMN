@@ -248,6 +248,12 @@ def main():
         if line.startswith(("Admitted", "Flagged", "Needs")):
             print("  " + line)
     _run([sys.executable, str(HERE / "memory_embed.py"), "build"])
+    # Archive junk before wiring edges: harness bloat + trivial fragments are
+    # not memories (reversible — .md files move to 90_ARCHIVE/pruned).
+    r = _run([sys.executable, str(HERE / "memory_prune.py")])
+    for line in r.stdout.splitlines():
+        if line.startswith("OK archived"):
+            print("  [prune] " + line)
     # Connect the new cells: without build-edges they're islands (embedded but
     # no associative strings), starving constellation detection + navigation.
     _run([sys.executable, str(HERE / "memory_graph.py"), "build-edges"])

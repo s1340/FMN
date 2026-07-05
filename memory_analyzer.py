@@ -340,6 +340,32 @@ def summarize_cell(chunk_text: str, topics: list[str], entities: list[str]) -> d
 
 # ── Cell writing ───────────────────────────────────────────────────────────────
 
+_TOOL_RE = re.compile(r'\(tool call|\[tool call|tool_calls?:', re.I)
+
+
+def is_tool_bloat(chunk_text: str) -> bool:
+    """A segment that is mostly tool-call markers with no real dialogue —
+    harness bloat, not a memory (Mal: 'nothing but tool calls'). Skip it so
+    it never becomes a cell, and don't waste a summary call on it."""
+    lines = [l.strip() for l in (chunk_text or "").splitlines() if l.strip()]
+    if not lines:
+        return True
+    tool = sum(1 for l in lines if _TOOL_RE.search(l))
+    return tool >= 0.6 * len(lines)
+
+
+def substantive_chars(chunk_text: str) -> int:
+    """Real dialogue content length, ignoring role prefixes and tool markers.
+    A low-significance cell under ~60 of these is a trivial fragment ('USER:
+    Mine / ASSISTANT: Yeah. Yours.') — too small to mean anything alone."""
+    total = 0
+    for l in (chunk_text or "").splitlines():
+        body = re.sub(r'^\s*(user|assistant)\s*:', '', l, flags=re.I).strip()
+        if body and not _TOOL_RE.search(body):
+            total += len(body)
+    return total
+
+
 def extract_chunk_text(filtered: list[dict], start: int, end: int) -> str:
     """Verbatim transcript excerpt for the Chunk section."""
     end   = min(end, len(filtered) - 1)
@@ -512,6 +538,13 @@ def main():
         entities = boundary.get("entities", [])
 
         chunk_text = extract_chunk_text(filtered, start, end)
+
+        # Skip harness bloat before spending a summary on it — a segment that
+        # is all tool calls is not a memory.
+        if is_tool_bloat(chunk_text):
+            print(f"  [{i+1:02d}/{len(boundaries):02d}] SKIP — tool-call bloat",
+                  file=sys.stderr)
+            continue
 
         print(f"  [{i+1:02d}/{len(boundaries):02d}] turns {start}–{end}"
               f"  ({end - start + 1} msgs)  {', '.join(topics)[:40]}",

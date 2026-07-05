@@ -115,8 +115,9 @@ _JUNK_BLOCK_START = re.compile(r"^\s*(\{|\[)\s*\"")
 # Whole messages that are harness/bot chatter, not the two of you talking:
 # Hermes delivery notices, cron banners, pure slash-commands, boot blocks.
 _SYSTEM_MSG = re.compile(
-    r"^\s*(📬|⏰|🔄|⚙️|\[cron\]|/[a-z_]+\s*$|A home channel is|Type /sethome|"
-    r"VAULT_RECALL|<!-- Generated:|### Morning Recall)", re.I)
+    r"^\s*(📬|⏰|🔄|⚙️|⏳|✅|❌|⚠️|🟢|🔴|\[cron\]|/[a-z_]+\s*$|A home channel is|"
+    r"Type /sethome|Agent is running|VAULT_RECALL|<!-- Generated:|"
+    r"### Morning Recall)", re.I)
 
 
 def is_system_message(content: str) -> bool:

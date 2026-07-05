@@ -467,8 +467,11 @@ def query_graph(text: str, graph: dict, limit: int = 10, touch: bool = False,
     try:
         import memory_embed
         sem = memory_embed.semantic_scores(text, memory_embed.load_store())
+        # Scale-aware gate: top-5 was tuned at ~100 cells; at 382 the right
+        # answer routinely ranks 6th-15th. ~5% of vault, floor 5.
+        k_sem = max(5, int(len(graph["nodes"]) * 0.05))
         sem_top = {cid for cid, s in
-                   sorted(sem.items(), key=lambda x: -x[1])[:5] if s >= 0.18}
+                   sorted(sem.items(), key=lambda x: -x[1])[:k_sem] if s >= 0.18}
     except Exception:
         sem = {}
 

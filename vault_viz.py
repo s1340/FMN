@@ -878,6 +878,10 @@ h1 { color:#fff; font-size:15px; letter-spacing:0; display:flex; align-items:cen
   <!-- VAULT -->
   <div id="tab-vault" style="display:flex;flex:1;overflow:hidden;">
     <div class="sidebar">
+      <div style="padding:8px 10px 0">
+        <input class="qtest-in" id="mem-search" placeholder="search memories…"
+          style="width:100%" oninput="renderList()">
+      </div>
       <div class="filters" id="filters">
         <button class="fb on" data-f="all">all</button>
         <button class="fb" data-f="bright">★ bright</button>
@@ -1080,12 +1084,37 @@ function renderList() {
   else if (currentFilter === 'unverified') nodes = nodes.filter(n => (n.trust||'') === 'auto');
   else if (currentFilter !== 'all') nodes = nodes.filter(n => n.semantic_type === currentFilter);
 
+  const q = ((document.getElementById('mem-search')||{}).value || '').toLowerCase();
+  if (q) nodes = nodes.filter(n =>
+    (n.brief||'').toLowerCase().includes(q)
+    || (n.topics||[]).join(' ').toLowerCase().includes(q)
+    || (n.entities||[]).join(' ').toLowerCase().includes(q)
+    || String(n.cell_id).includes(q));
   const list = document.getElementById('cell-list');
   if (!nodes.length) {
     list.innerHTML = '<div style="padding:16px;color:var(--muted)">No memories match</div>';
     return;
   }
-  list.innerHTML = nodes.map(n => {
+  // group by day, newest first, collapsible (state survives re-renders)
+  const groups = {};
+  nodes.forEach(n => { const d = String(n.session_date||'undated').slice(0,10);
+    (groups[d] = groups[d] || []).push(n); });
+  const days = Object.keys(groups).sort().reverse();
+  list.innerHTML = days.map(day => {
+    const open = !memCollapsed.has(day);
+    return `<div class="rt" style="cursor:pointer;padding:7px 11px;margin:0;
+      background:var(--surface);border-bottom:1px solid var(--border);
+      display:flex;justify-content:space-between" onclick="toggleDay('${day}')">
+      <span>${open?'▾':'▸'} ${day}</span><span>${groups[day].length}</span></div>`
+      + (open ? groups[day].map(n => cellRow(n)).join('') : '');
+  }).join('');
+}
+let memCollapsed = new Set();
+function toggleDay(d) {
+  memCollapsed.has(d) ? memCollapsed.delete(d) : memCollapsed.add(d);
+  renderList();
+}
+function cellRow(n) {
     const sc = 's-' + (n.significance || 'medium');
     const tc = 't-' + (n.semantic_type || 'work_research');
     const tl = (n.semantic_type || '?').replace('_', ' ');
@@ -1103,7 +1132,6 @@ function renderList() {
       <div class="ci-brief">${esc(n.brief||'')}</div>
       <div class="ci-date">${n.session_date||''} · ${n.temporal_status||''}</div>
     </div>`;
-  }).join('');
 }
 
 // ── Detail ────────────────────────────────────────────────────────────────────

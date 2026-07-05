@@ -272,6 +272,19 @@ def form(graph: dict, member_ids: list[str], gist_brief: str,
         "neighbors": [], "members": members, "file": str(path),
         "trust": "human", "content_hash": content_hash(gist_brief, gist_episode, album),
     }
+    # Guard: a cell can live in ONE bond. Forming over already-bonded members
+    # silently steals membership and leaves a hollow twin star (found live
+    # 2026-07-05: "the splinter" / "What I'm afraid to lose" duplicate).
+    taken = {m: graph["nodes"][m].get("in_constellation") for m in members
+             if graph["nodes"].get(m, {}).get("in_constellation")}
+    if taken:
+        owners = {graph["nodes"].get(c, {}).get("name", c)
+                  for c in set(taken.values())}
+        print(f"REFUSED: {len(taken)} member(s) already belong to "
+              f"{', '.join(map(repr, owners))}. Dissolve that bond first "
+              f"(constellation dissolve <id>) or pick different members.")
+        return None
+
     # Nest the members: they leave individual boot rotation, stay searchable.
     for m in members:
         graph["nodes"][m]["in_constellation"] = cid
@@ -302,7 +315,12 @@ def dissolve(graph: dict, cid: str) -> int:
                       if not (e.get("type") == "constellation" and cid in (e["a"], e["b"]))]
     p = Path(node.get("file", ""))
     if p.exists():
-        p.unlink()
+        # archive, never delete — the gist is someone's writing
+        import shutil
+        from datetime import datetime, timezone
+        dest = mg.VAULT_ROOT / "90_ARCHIVE" / "pruned" /             (datetime.now(timezone.utc).strftime("%Y-%m-%dT%H-%M-%S") + "_dissolved")
+        dest.mkdir(parents=True, exist_ok=True)
+        shutil.move(str(p), str(dest / p.name))
     del graph["nodes"][cid]
     return released
 

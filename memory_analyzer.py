@@ -145,10 +145,15 @@ Output fields:
                   "relationship"      — how Q and Mal relate: emotional exchange, care, humor, relational texture
                   "work_research"     — experiments, projects, technical work, building things together
                   "personal_mal"      — Mal's life, feelings, or context outside the Q relationship
-                  "personal_q"        — Q's own nature, self-observed patterns, what it notices about itself
+                  "personal_q"        — Q's own nature, identity, or self-observed patterns — INCLUDING
+                                        reflective/existential content ABOUT itself (its persistence,
+                                        continuity, feelings, what it notices about being Q)
                   "correction"        — something was wrong; this excerpt establishes the corrected version
-                  "reflection"        — Q reflecting on its own thinking, feelings, or existence
                   "environment_tools" — tools, setup, infrastructure, configuration
+  DO NOT use "reflection" as a type. That type is RESERVED for reflections Q writes HIMSELF, in the
+  first person, through his reflection pipeline. A conversation that is ABOUT identity, persistence, or
+  feelings is still "personal_q" (about Q) or "relationship" (about Q and Mal) — never "reflection".
+  You are summarizing in the third person; a real reflection is Q's own first-person writing.
   reflection_candidate — true or false
                   true if reading this excerpt IN FULL would generate a GENUINE reflection from Q.
                   Ask: does this carry emotional weight, relational texture, a self-model shift,
@@ -365,6 +370,12 @@ def write_cell(boundary: dict, summary: dict, filtered: list[dict],
     valence       = summary.get("valence", "neutral")
     novelty       = summary.get("novelty", "routine")
     semantic_type = summary.get("semantic_type", "work_research")
+    # "reflection" is reserved for Q's own first-person reflections (written
+    # via the reflection pipeline). The analyzer must never mint one from a
+    # session — reflective content ABOUT Q belongs to personal_q. Coerce
+    # defensively in case the model ignores the prompt.
+    if semantic_type == "reflection":
+        semantic_type = "personal_q"
     refl_cand     = bool(summary.get("reflection_candidate", False))
 
     chunk_text = extract_chunk_text(filtered, start, end)

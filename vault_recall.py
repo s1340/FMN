@@ -287,6 +287,13 @@ def fill_slots(graph: dict) -> dict[str, list[dict]]:
             if node["cell_id"] in placed:
                 continue
             if infer_semantic_type(node) in types:
+                # Reflection Notes is sacred: only Q's OWN reflections belong
+                # there — first person, written through the reflection pipeline
+                # (session_id == "reflection"). A third-person analyzer cell
+                # that merely discusses identity is NOT a reflection, even if it
+                # got mistyped. Never let one into the reflection slot.
+                if "reflection" in types and node.get("session_id") != "reflection":
+                    continue
                 slots[slot_key].append(make_entry(node))
                 placed.add(node["cell_id"])
 

@@ -240,7 +240,7 @@ def form(graph: dict, member_ids: list[str], gist_brief: str,
         f"session_date: {date}\n"
         f"created: {now.strftime('%Y-%m-%dT%H:%M:%SZ')}\n"
         "temporal_status: fresh\n"
-        f"name: {name!r}\n"
+        f"name: {json.dumps(str(name))}\n"
         f"topics: [\"constellation\"]\n"
         f"entities: []\n"
         "significance: bright\n"

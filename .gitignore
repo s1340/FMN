@@ -8,3 +8,5 @@ eval_questions.json
 # one-off session scripts with personal archive paths
 run_merge_execute.py
 run_merge_preview.py
+# Q's working drafts (gists) — private
+arcs/
